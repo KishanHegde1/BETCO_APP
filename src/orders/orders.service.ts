@@ -8,6 +8,7 @@ import { LessThanOrEqual, Repository } from 'typeorm';
 
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Dealer } from '../entities/dealer.entity';
+import { NotificationType } from '../entities/notification.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
@@ -16,7 +17,9 @@ import {
   AdminOrderDetailsRow,
   AdminOrderSummaryRow,
   OrdersRepository,
+  StaffBillingQueueOrderRow,
 } from '../repositories/orders.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { CreateOrderDto, OrderItemDto } from './dto/create-order.dto';
@@ -24,6 +27,7 @@ import {
   ApprovedOrderItemDto,
   UpdateOrderStatusDto,
 } from './dto/update-order-status.dto';
+import { StaffBillingQueueQueryDto } from './dto/staff-billing-queue-query.dto';
 
 export interface OrderHistoryResponse {
   id: string;
@@ -58,6 +62,16 @@ export type AdminOrderDetailsResponse = AdminOrderDetailsRow;
 
 export type DealerOrderDetailsResponse = AdminOrderDetailsRow;
 
+export type StaffBillingQueueOrder = StaffBillingQueueOrderRow;
+
+export interface BillGenerationResponse {
+  id: string;
+  status: OrderStatus.BILLED;
+  billGenerated: true;
+  billGeneratedAt: Date;
+  billGeneratedBy: string;
+}
+
 export interface PaginatedAdminOrdersResponse {
   items: AdminOrderSummaryResponse[];
   pagination: {
@@ -74,6 +88,7 @@ export class OrdersService {
     private readonly ordersRepository: OrdersRepository,
     private readonly dealersRepository: DealersRepository,
     private readonly usersService: UsersService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async findMyOrders(userId: string): Promise<OrderHistoryResponse[]> {
@@ -244,6 +259,68 @@ export class OrdersService {
       throw new NotFoundException('Order not found.');
     }
     return order;
+  }
+
+  findBillingQueue(
+    query: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrder[]> {
+    return this.ordersRepository.findStaffBillingQueue(query);
+  }
+
+  async generateBillForStaff(
+    id: string,
+    staffUserId: string,
+  ): Promise<BillGenerationResponse> {
+    return this.ordersRepository.transaction(async (manager) => {
+      const orderRepository = manager.getRepository(Order);
+      const order = await orderRepository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) {
+        throw new NotFoundException('Order not found.');
+      }
+      if (
+        order.status !== OrderStatus.APPROVED &&
+        order.status !== OrderStatus.PARTIALLY_FULFILLED
+      ) {
+        throw new ConflictException(
+          'Only approved or partially fulfilled orders can be marked billed.',
+        );
+      }
+
+      const dealer = await manager.getRepository(Dealer).findOneBy({
+        id: order.dealerId,
+      });
+      if (!dealer) {
+        throw new NotFoundException('Dealer profile not found for this order.');
+      }
+
+      const generatedAt = new Date();
+      order.status = OrderStatus.BILLED;
+      order.billGenerated = true;
+      order.billGeneratedAt = generatedAt;
+      order.billGeneratedBy = staffUserId;
+      await orderRepository.save(order);
+
+      await this.notificationsService.create(
+        {
+          userId: dealer.userId,
+          type: NotificationType.BILL_GENERATED,
+          title: 'Bill Generated',
+          body: 'Your bill has been generated in Tally.',
+        },
+        manager,
+      );
+
+      return {
+        id: order.id,
+        status: OrderStatus.BILLED,
+        billGenerated: true,
+        billGeneratedAt: generatedAt,
+        billGeneratedBy: staffUserId,
+      };
+    });
   }
 
   async updateStatusForAdmin(

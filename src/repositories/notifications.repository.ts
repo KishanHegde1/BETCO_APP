@@ -10,4 +10,11 @@ export class NotificationsRepository {
     @InjectRepository(Notification)
     readonly repository: Repository<Notification>,
   ) {}
+
+  findByUserId(userId: string): Promise<Notification[]> {
+    return this.repository.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+  }
 }

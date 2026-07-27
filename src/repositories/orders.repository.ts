@@ -9,12 +9,13 @@ import {
 
 import { Dealer } from '../entities/dealer.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
-import { Order } from '../entities/order.entity';
+import { Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
 import { businessDayStart } from '../common/utils/business-date.util';
 import { AdminOrdersQueryDto } from '../orders/dto/admin-orders-query.dto';
+import { StaffBillingQueueQueryDto } from '../orders/dto/staff-billing-queue-query.dto';
 
 export interface OrderItemTotal {
   orderId: string;
@@ -52,7 +53,33 @@ export interface AdminOrderDetailsRow extends AdminOrderSummaryRow {
   adminRemarks: string | null;
   cancellationReason: string | null;
   reviewedAt: Date | null;
+  billGenerated: boolean;
+  billGeneratedAt: Date | null;
+  billGeneratedBy: string | null;
+  billGeneratedByName: string | null;
   items: AdminOrderItemRow[];
+}
+
+export interface StaffBillingQueueItemRow {
+  productId: string;
+  productName: string;
+  sku: string;
+  unit: string;
+  requestedQuantity: number;
+  approvedQuantity: number | null;
+}
+
+export interface StaffBillingQueueOrderRow {
+  id: string;
+  orderNumber: string;
+  status: OrderStatus;
+  dealerName: string;
+  dealerPhone: string | null;
+  createdAt: Date;
+  totalItems: number;
+  totalQuantity: number;
+  totalApprovedQuantity: number;
+  items: StaffBillingQueueItemRow[];
 }
 
 export interface AdminOrdersPage {
@@ -142,6 +169,104 @@ export class OrdersRepository {
     return this.findDetails({ id, dealerId });
   }
 
+  async findStaffBillingQueue(
+    options: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrderRow[]> {
+    const query = this.adminBaseQuery()
+      .innerJoin(OrderItem, 'orderItem', 'orderItem.order_id = "order".id')
+      .innerJoin(Product, 'product', 'product.id = orderItem.product_id')
+      .select([
+        '"order".id AS "orderId"',
+        '"order".status AS "status"',
+        '"order".created_at AS "createdAt"',
+        'COALESCE(NULLIF(dealer.business_name, \'\'), "user".username) AS "dealerName"',
+        'COALESCE(dealer.phone, "user".phone) AS "dealerPhone"',
+        'orderItem.product_id AS "productId"',
+        'product.name AS "productName"',
+        'product.sku AS "sku"',
+        'product.unit AS "unit"',
+        'orderItem.quantity AS "requestedQuantity"',
+        'orderItem.approved_quantity AS "approvedQuantity"',
+      ])
+      .where('"order".status IN (:...statuses)', {
+        statuses: [OrderStatus.APPROVED, OrderStatus.PARTIALLY_FULFILLED],
+      });
+
+    const search = options.search?.trim();
+    if (search) {
+      query.andWhere(
+        new Brackets((builder) => {
+          builder
+            .where('CAST("order".id AS TEXT) ILIKE :search', {
+              search: `%${search}%`,
+            })
+            .orWhere('"user".username ILIKE :search', {
+              search: `%${search}%`,
+            })
+            .orWhere('dealer.business_name ILIKE :search', {
+              search: `%${search}%`,
+            })
+            .orWhere('COALESCE(dealer.phone, "user".phone) ILIKE :search', {
+              search: `%${search}%`,
+            });
+        }),
+      );
+    }
+
+    const rows = await query
+      .orderBy('"order".created_at', 'DESC')
+      .addOrderBy('product.name', 'ASC')
+      .getRawMany<{
+        orderId: string;
+        status: OrderStatus;
+        createdAt: Date;
+        dealerName: string;
+        dealerPhone: string | null;
+        productId: string;
+        productName: string;
+        sku: string;
+        unit: string;
+        requestedQuantity: string | number;
+        approvedQuantity: string | number | null;
+      }>();
+
+    const ordersById = new Map<string, StaffBillingQueueOrderRow>();
+    for (const row of rows) {
+      let order = ordersById.get(row.orderId);
+      if (!order) {
+        order = {
+          id: row.orderId,
+          orderNumber: row.orderId,
+          status: row.status,
+          dealerName: row.dealerName,
+          dealerPhone: row.dealerPhone,
+          createdAt: row.createdAt,
+          totalItems: 0,
+          totalQuantity: 0,
+          totalApprovedQuantity: 0,
+          items: [],
+        };
+        ordersById.set(row.orderId, order);
+      }
+
+      const requestedQuantity = Number(row.requestedQuantity);
+      const approvedQuantity =
+        row.approvedQuantity == null ? null : Number(row.approvedQuantity);
+      order.items.push({
+        productId: row.productId,
+        productName: row.productName,
+        sku: row.sku,
+        unit: row.unit,
+        requestedQuantity,
+        approvedQuantity,
+      });
+      order.totalItems += 1;
+      order.totalQuantity += requestedQuantity;
+      order.totalApprovedQuantity += approvedQuantity ?? 0;
+    }
+    return [...ordersById.values()];
+  }
+
   private async findDetails({
     id,
     dealerId,
@@ -161,6 +286,10 @@ export class OrdersRepository {
         '"order".admin_remarks AS "adminRemarks"',
         '"order".cancellation_reason AS "cancellationReason"',
         '"order".reviewed_at AS "reviewedAt"',
+        'COALESCE("order".bill_generated, false) AS "billGenerated"',
+        '"order".bill_generated_at AS "billGeneratedAt"',
+        '"order".bill_generated_by AS "billGeneratedBy"',
+        'billGenerator.username AS "billGeneratedByName"',
         '"order".status AS "status"',
         '"order".created_at AS "createdAt"',
       ])
@@ -212,6 +341,7 @@ export class OrdersRepository {
 
     return {
       ...row,
+      billGenerated: this.toBoolean(row.billGenerated),
       totalItems: normalizedItems.length,
       totalQuantity: normalizedItems.reduce(
         (sum, item) => sum + item.quantity,
@@ -229,7 +359,12 @@ export class OrdersRepository {
     return this.repository
       .createQueryBuilder('order')
       .innerJoin(Dealer, 'dealer', 'dealer.id = "order".dealer_id')
-      .innerJoin(User, 'user', 'user.id = dealer.user_id');
+      .innerJoin(User, 'user', 'user.id = dealer.user_id')
+      .leftJoin(
+        User,
+        'billGenerator',
+        'billGenerator.id = "order".bill_generated_by',
+      );
   }
 
   private adminSummaryQuery(): SelectQueryBuilder<Order> {
@@ -304,6 +439,10 @@ export class OrdersRepository {
       totalQuantity: Number(row.totalQuantity),
       totalApprovedQuantity: Number(row.totalApprovedQuantity),
     };
+  }
+
+  private toBoolean(value: unknown): boolean {
+    return value === true || value === 'true' || value === 't' || value === 1;
   }
 
   private nextBusinessDayStart(value: string): Date {

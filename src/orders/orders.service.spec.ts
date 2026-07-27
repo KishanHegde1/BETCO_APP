@@ -9,6 +9,7 @@ import { Dealer } from '../entities/dealer.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
+import { NotificationType } from '../entities/notification.entity';
 import { OrdersService } from './orders.service';
 
 describe('OrdersService', () => {
@@ -23,6 +24,7 @@ describe('OrdersService', () => {
   };
   const dealersRepository = { findByUserId: jest.fn() };
   const usersService = { findActiveById: jest.fn() };
+  const notificationsService = { create: jest.fn() };
   const dealerRepository = {
     findOneBy: jest.fn(),
     create: jest.fn(),
@@ -49,6 +51,7 @@ describe('OrdersService', () => {
     ordersRepository as never,
     dealersRepository as never,
     usersService as never,
+    notificationsService as never,
   );
 
   beforeEach(() => {
@@ -70,7 +73,11 @@ describe('OrdersService', () => {
       username: 'dealer-user',
       phone: '9000000000',
     });
-    dealerRepository.findOneBy.mockResolvedValue({ id: 'dealer-1' });
+    dealerRepository.findOneBy.mockResolvedValue({
+      id: 'dealer-1',
+      userId: 'dealer-user-1',
+    });
+    notificationsService.create.mockResolvedValue({ id: 'notification-1' });
     productRepository.findOneBy.mockResolvedValue({
       id: 'product-1',
       name: 'ILTT 18060 PRO',
@@ -538,5 +545,71 @@ describe('OrdersService', () => {
       pagination: { page: 2, limit: 10, totalItems: 13, totalPages: 2 },
     });
     expect(ordersRepository.findAdminPage).toHaveBeenCalledWith(query);
+  });
+
+  it('marks an approved order billed and notifies its dealer after Tally confirmation', async () => {
+    const order = {
+      id: 'order-1',
+      dealerId: 'dealer-1',
+      status: OrderStatus.APPROVED,
+      billGenerated: false,
+      billGeneratedAt: undefined as Date | undefined,
+    };
+    findOrder.mockResolvedValue(order);
+
+    await expect(
+      service.generateBillForStaff('order-1', 'staff-user-1'),
+    ).resolves.toMatchObject({
+      id: 'order-1',
+      status: OrderStatus.BILLED,
+      billGenerated: true,
+      billGeneratedBy: 'staff-user-1',
+    });
+
+    expect(order).toMatchObject({
+      status: OrderStatus.BILLED,
+      billGenerated: true,
+      billGeneratedBy: 'staff-user-1',
+    });
+    expect(order.billGeneratedAt).toBeInstanceOf(Date);
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      {
+        userId: 'dealer-user-1',
+        type: NotificationType.BILL_GENERATED,
+        title: 'Bill Generated',
+        body: 'Your bill has been generated in Tally.',
+      },
+      manager,
+    );
+  });
+
+  it('does not allow an order to be billed twice', async () => {
+    findOrder.mockResolvedValue({
+      id: 'order-1',
+      dealerId: 'dealer-1',
+      status: OrderStatus.BILLED,
+    });
+
+    await expect(
+      service.generateBillForStaff('order-1', 'staff-user-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(orderRepository.save).not.toHaveBeenCalled();
+    expect(notificationsService.create).not.toHaveBeenCalled();
+  });
+
+  it('does not allow a cancelled order to be billed', async () => {
+    findOrder.mockResolvedValue({
+      id: 'order-1',
+      dealerId: 'dealer-1',
+      status: OrderStatus.CANCELLED,
+    });
+
+    await expect(
+      service.generateBillForStaff('order-1', 'staff-user-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(orderRepository.save).not.toHaveBeenCalled();
+    expect(notificationsService.create).not.toHaveBeenCalled();
   });
 });

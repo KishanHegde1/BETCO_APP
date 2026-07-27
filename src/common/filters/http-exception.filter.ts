@@ -23,12 +23,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const exceptionResponse = isHttpException
       ? exception.getResponse()
       : undefined;
-    const message = this.getMessage(exceptionResponse, exception);
+    const message = isHttpException
+      ? this.getMessage(exceptionResponse, exception)
+      : 'Internal server error';
     const requestId = String(response.getHeader('x-request-id') ?? 'unknown');
 
     if (!isHttpException) {
       this.logger?.error(
-        `[${requestId}] ${request.method} ${request.url} failed: ${message}`,
+        `[${requestId}] ${request.method} ${request.url} failed: ${this.getMessage(
+          exceptionResponse,
+          exception,
+        )}`,
+        exception instanceof Error ? exception.stack : undefined,
       );
     }
 

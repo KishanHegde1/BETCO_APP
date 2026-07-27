@@ -1,9 +1,11 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsIn,
+  IsNotEmpty,
   IsOptional,
   IsPort,
   IsString,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -12,18 +14,29 @@ class EnvironmentVariables {
   @IsPort()
   PORT?: string;
 
-  @IsOptional()
+  @ValidateIf(
+    (environment: EnvironmentVariables) => environment.NODE_ENV !== 'test',
+  )
   @IsString()
+  @IsNotEmpty()
   DATABASE_URL?: string;
 
   @IsOptional()
   @IsIn(['true', 'false'])
   DATABASE_SSL?: string;
 
-  @IsOptional()
+  @ValidateIf(
+    (environment: EnvironmentVariables) => environment.NODE_ENV !== 'test',
+  )
   @IsString()
+  @IsNotEmpty()
   JWT_SECRET?: string;
 
+  @IsOptional()
+  @IsString()
+  JWT_EXPIRES_IN?: string;
+
+  /** @deprecated Use JWT_EXPIRES_IN. Kept for deployed environments. */
   @IsOptional()
   @IsString()
   JWT_EXPIRES?: string;
@@ -35,6 +48,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsIn(['development', 'test', 'production'])
   NODE_ENV?: string;
+
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  SWAGGER_ENABLED?: string;
 
   @IsOptional()
   @IsString()
@@ -57,6 +74,15 @@ export function validateEnvironment(
 
   if (errors.length > 0) {
     throw new Error(`Environment validation failed: ${errors.toString()}`);
+  }
+
+  if (
+    validatedConfig.NODE_ENV === 'production' &&
+    validatedConfig.CORS_ORIGIN?.trim() === '*'
+  ) {
+    throw new Error(
+      'CORS_ORIGIN must be an explicit HTTPS origin in production, not "*".',
+    );
   }
 
   return config;

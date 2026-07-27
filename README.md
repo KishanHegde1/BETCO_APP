@@ -1,136 +1,87 @@
 # Betco Traders Backend
 
-NestJS architecture for Betco Aqua Traders, covering the future dealer and administration workflows for batteries, inverters, and solar products.
+NestJS API for the Betco Aqua Traders mobile application. It uses Neon PostgreSQL through TypeORM and exposes URI-versioned routes under `/v1`.
 
-## What is included
+## Production deployment
 
-- NestJS v11 modular foundation with v1 API routing and Swagger at `/api/docs`.
-- PostgreSQL/Neon TypeORM configuration using `DATABASE_URL`, TLS, retries, and a connection-pool limit. `synchronize` is explicitly disabled; versioned SQL migrations create the authentication and product-catalogue tables.
-- Implemented authentication, dealer profile, catalogue, daily-stock, order, and administration modules. Billing, payments, notifications, and Tally remain structural modules.
-- Username/password JWT authentication with database-controlled `ADMIN` and `USER` roles. The mobile app has one sign-in form; it never lets the device choose a role.
-- Global validation, standardized success/error response envelopes, request logging, request IDs, Helmet, compression, CORS, rate limiting, and Winston logging.
-- A public health endpoint at `/health`. It is the only functional business-adjacent endpoint.
+This project is ready for a Render Web Service with these commands:
 
-## Setup
+```text
+Build Command: npm ci && npm run build
+Start Command: npm run start:prod
+Health Check Path: /health
+```
+
+`start:prod` runs `node dist/main`. The application binds to `0.0.0.0` and reads Render's `PORT` variable. The repository contains an `.npmrc` with `include=dev`; this ensures the Nest CLI and TypeScript compiler are available to the exact build command even when Render builds with `NODE_ENV=production`.
+
+Create the Render service, add the environment variables below, deploy, then confirm:
+
+```text
+GET https://<your-render-service>.onrender.com/health
+```
+
+The health endpoint is intentionally a lightweight liveness check. A successful response is wrapped in the standard API envelope.
+
+## Required environment variables
+
+Copy `.env.example` for local development. Do not upload `.env` or database credentials to Git.
+
+| Variable                                        | Required           | Production value                                                                    |
+| ----------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                  | Yes                | Neon pooled or direct PostgreSQL connection string with `sslmode=require`           |
+| `JWT_SECRET`                                    | Yes                | Long random secret, unique to this environment                                      |
+| `NODE_ENV`                                      | Yes                | `production`                                                                        |
+| `PORT`                                          | Render supplies it | Do not hardcode it                                                                  |
+| `DATABASE_SSL`                                  | Recommended        | `true` for Neon                                                                     |
+| `JWT_EXPIRES_IN`                                | No                 | Token lifetime, default `15d`                                                       |
+| `CORS_ORIGIN`                                   | Optional           | Explicit comma-separated HTTPS browser origins; leave empty for a native-only app   |
+| `SWAGGER_ENABLED`                               | Optional           | `false` by default in production; set `true` only when public API docs are intended |
+| `TALLY_CONNECTOR_ID` / `TALLY_CONNECTOR_SECRET` | Optional           | Set only when the Tally connector is used                                           |
+
+`JWT_EXPIRES` remains accepted for compatibility with older Render environments, but new deployments should use `JWT_EXPIRES_IN`.
+
+Firebase is not configured in this backend, so no Firebase environment variables are required.
+
+## Neon database
+
+The API reads `DATABASE_URL` at startup, enables TLS for Neon and in production, retries initial connections, limits its pool size, and keeps `synchronize: false`. It never auto-runs schema changes.
+
+Apply the SQL files in `src/database/migrations` manually, in numeric order, using the **Neon SQL Editor** for the target database. The current migration set is `001` through `012`; `012_admin_dealer_analytics_indexes.sql` is the latest performance index migration.
+
+Do not run the development seed against a production Neon database. `npm run seed:dev` refuses `NODE_ENV=production`.
+
+The business calendar is fixed to `Asia/Kolkata` throughout stock and order logic. Render's server timezone does not alter those calculations.
+
+## Security and observability
+
+- Helmet, compression, strict global validation, request IDs, JSON logs, and a global request throttle are enabled.
+- CORS is disabled for browser requests by default in production. If a browser client needs it, set explicit origins; `CORS_ORIGIN=*` is rejected in production.
+- JWT signing and verification fail fast when `JWT_SECRET` is missing.
+- Unexpected server errors are logged server-side with their request ID, while clients receive a generic `Internal server error` rather than database details.
+- Swagger is available at `/api/docs` in development. It is disabled by default in production.
+
+## Verification commands
 
 ```bash
-npm install
-Copy-Item .env.example .env
-```
-
-Set every value in `.env`, especially `DATABASE_URL`, before starting the API. For Neon, use its PostgreSQL connection string with SSL enabled.
-
-## Neon authentication setup
-
-1. In the Neon SQL Editor, run [`src/database/migrations/001_create_auth_users.sql`](src/database/migrations/001_create_auth_users.sql), followed by [`src/database/migrations/002_create_product_catalog.sql`](src/database/migrations/002_create_product_catalog.sql), [`src/database/migrations/003_create_order_booking_tables.sql`](src/database/migrations/003_create_order_booking_tables.sql), [`src/database/migrations/004_admin_catalogue_daily_stock.sql`](src/database/migrations/004_admin_catalogue_daily_stock.sql), [`src/database/migrations/005_dealer_profile_address.sql`](src/database/migrations/005_dealer_profile_address.sql), [`src/database/migrations/006_orders_status_index.sql`](src/database/migrations/006_orders_status_index.sql), [`src/database/migrations/007_ensure_product_active.sql`](src/database/migrations/007_ensure_product_active.sql), [`src/database/migrations/008_order_workflow_safety_constraints.sql`](src/database/migrations/008_order_workflow_safety_constraints.sql), and [`src/database/migrations/009_add_betco_product_categories.sql`](src/database/migrations/009_add_betco_product_categories.sql).
-2. Create a user with a unique username, a phone number, a **bcrypt hash** of that phone number, and role `ADMIN` or `USER`. Do not store a plaintext phone number in `password_hash`.
-3. The user signs in once using that phone number as their initial password, then must set a personal password through `POST /v1/auth/change-password`.
-
-The Flutter app calls `POST /v1/auth/login` through the deployed NestJS API. It must not contain `DATABASE_URL` or connect to Neon directly. Neon requires SSL/TLS connections; retain `sslmode=require` in the server-side connection string. [Neon connection guidance](https://neon.com/docs/connect/query-with-psql-editor) and [security overview](https://neon.com/docs/security/security-overview) provide the current SSL requirements.
-
-## Product catalogue
-
-The authenticated `GET /v1/products` endpoint reads active products and category summaries from Neon, in category/name order. It returns an empty array until products are added. The Flutter home screen and Products tab both use this endpoint, so new active records appear automatically after refresh.
-
-Run `002_create_product_catalog.sql` in Neon before using the endpoint. It creates an empty catalogue deliberately; the SQL file includes commented examples for adding a category and product later.
-
-## Dealer order booking
-
-`GET /v1/daily-stock/today` returns every active product, its category, and its current quantity for the Indian calendar day. Products without a row or without positive stock return `quantity: 0` and `isAvailable: false`, so the mobile app displays **Yet to come**. `POST /v1/orders` creates a pending dealer order and reserves the selected quantity atomically, so stock immediately refreshes to the remaining amount. `GET /v1/orders/my-orders` returns the signed-in dealer's booking history with its date, time, status, and total quantity.
-
-Run `003_create_order_booking_tables.sql` before using this feature. It intentionally contains no sample stock, so unavailable products display as **Yet to come** until an administrator adds today's stock record.
-
-## Admin catalogue and stock management
-
-Authenticated administrators can prepare the dealer catalogue without using the Neon SQL editor:
-
-- `GET|POST|PATCH|DELETE /v1/admin/categories`
-- `GET|POST|PATCH|DELETE /v1/admin/products`
-- `GET|PUT /v1/admin/daily-stock/:date`, `PATCH /v1/admin/daily-stock/:date/products/:productId`, and `POST /v1/admin/daily-stock/:date/copy`
-- `GET /v1/admin/dashboard/summary`
-
-Stock records keep both `totalQuantity` and `availableQuantity`; booked quantity is derived as `totalQuantity - availableQuantity`. Admin bulk updates accept `totalQuantity` (recommended) or `availableQuantity`, never both. Updating total stock below the already booked quantity returns a conflict.
-
-Run the new `004_admin_catalogue_daily_stock.sql` migration before using any admin endpoints.
-
-## Admin orders
-
-Administrators can review dealer bookings without direct Neon access:
-
-- `GET /v1/admin/orders` supports pagination, search, status, dealer, date, and sort filters.
-- `GET /v1/admin/orders/:id` returns the dealer profile summary and booked product items.
-
-Run `006_orders_status_index.sql` after the earlier migrations. It adds a safe, reversible index for status/date filtered admin-order lists; it does not change existing order data.
-
-## Dealer profile
-
-Authenticated users can read and update only their own profile with:
-
-- `GET /v1/profile`
-- `PATCH /v1/profile`
-
-The profile reuses `dealers.business_name` as `shopName` and `dealers.phone` as `contactNumber`. The only new database field is `dealers.address` (`TEXT NULL`) from migration `005_dealer_profile_address.sql`; its rollback is included in that file. The endpoint accepts only `username`, `shopName`, `contactNumber`, and `address`, validates and trims them, and rejects protected fields through the global validation pipe.
-
-Do not run the production migration automatically from the API. To apply only this migration to an explicitly configured Neon database from PowerShell, run:
-
-```powershell
-psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f src/database/migrations/005_dealer_profile_address.sql
-```
-
-To apply the new order-list index only, run:
-
-```powershell
-psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f src/database/migrations/006_orders_status_index.sql
-```
-
-If an older existing `products` table is missing `is_active`, run
-`007_ensure_product_active.sql` in the Neon SQL Editor after the earlier migrations.
-
-## Development seed
-
-After applying the migrations, use `npm.cmd run seed:dev` only against a development database. The seed creates or updates two accounts (`admin` and `dealer`) with credentials supplied by `SEED_ADMIN_PASSWORD` and `SEED_USER_PASSWORD`, plus sample categories, products, and today’s stock. It refuses to run with `NODE_ENV=production`.
-
-| Variable | Purpose |
-| --- | --- |
-| `PORT` | HTTP server port (default `3000`) |
-| `DATABASE_URL` | Neon PostgreSQL connection string |
-| `DATABASE_SSL` | Set `true` for Neon; set `false` only for an intentionally non-TLS local database |
-| `JWT_SECRET` | Future JWT signing secret |
-| `JWT_EXPIRES` | Access-token lifetime, set to `15d` by default |
-| `CORS_ORIGIN` | Allowed frontend origin(s), comma-separated |
-| `NODE_ENV` | `development`, `test`, or `production` |
-| `TALLY_CONNECTOR_SECRET` | Future Tally connector credential |
-| `TALLY_CONNECTOR_ID` | Future Tally connector identifier |
-
-## Commands
-
-```bash
-npm run build
-npm run start:dev
+npm ci
 npm run lint
-npm test
-npm run test:e2e
+npm run build
+npm test -- --runInBand
+npm run test:e2e -- --runInBand
+npm run start:prod
 ```
 
-All successful application endpoints use this envelope:
+After startup, use `GET /health` and then stop the local process. No uploads, local data storage, Windows-only paths, or Firebase initialization are required by the running service.
+
+## API conventions
+
+Controllers use URI versioning (`/v1/...`), except for the neutral `/health` route. Successful responses use:
 
 ```json
 {
   "success": true,
   "message": "Request completed",
   "data": {},
-  "timestamp": "2026-07-25T00:00:00.000Z"
+  "timestamp": "2026-07-27T00:00:00.000Z"
 }
 ```
-
-## Render deployment
-
-1. Create a new Render Web Service from this repository.
-2. Set the build command to `npm install && npm run build`.
-3. Set the start command to `npm run start:prod`.
-4. Add the environment variables from `.env.example` in Render’s environment settings; use your Neon `DATABASE_URL`.
-5. Set `NODE_ENV=production` and configure `CORS_ORIGIN` to the deployed Flutter web origin if applicable.
-
-TallyPrime, billing, payments, and notifications remain structural placeholders. Catalogue, daily stock, dealer profile, and order booking are implemented server-side.
-#   B E T C O _ A P P  
- 

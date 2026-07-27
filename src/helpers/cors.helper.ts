@@ -1,4 +1,7 @@
-export function parseCorsOrigins(value: string): true | string[] {
+export function parseCorsOrigins(value: string): false | true | string[] {
+  if (value.trim().length === 0) {
+    return false;
+  }
   if (value.trim() === '*') {
     return true;
   }

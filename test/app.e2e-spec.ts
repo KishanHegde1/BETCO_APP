@@ -24,6 +24,9 @@ import { StockService } from '../src/stock/stock.service';
 import { AdminOrdersController } from '../src/orders/admin-orders.controller';
 import { OrdersController } from '../src/orders/orders.controller';
 import { OrdersService } from '../src/orders/orders.service';
+import { StaffBillingController } from '../src/orders/staff-billing.controller';
+import { NotificationsController } from '../src/notifications/notifications.controller';
+import { NotificationsService } from '../src/notifications/notifications.service';
 
 @Injectable()
 class IsolatedJwtGuard implements CanActivate {
@@ -34,7 +37,8 @@ class IsolatedJwtGuard implements CanActivate {
     }>();
     if (
       request.headers.authorization !== 'Bearer test-token' &&
-      request.headers.authorization !== 'Bearer admin-token'
+      request.headers.authorization !== 'Bearer admin-token' &&
+      request.headers.authorization !== 'Bearer staff-token'
     ) {
       throw new UnauthorizedException();
     }
@@ -42,11 +46,15 @@ class IsolatedJwtGuard implements CanActivate {
       sub:
         request.headers.authorization === 'Bearer admin-token'
           ? 'admin-1'
-          : 'dealer-1',
+          : request.headers.authorization === 'Bearer staff-token'
+            ? 'staff-1'
+            : 'dealer-1',
       role:
         request.headers.authorization === 'Bearer admin-token'
           ? UserRole.ADMIN
-          : UserRole.USER,
+          : request.headers.authorization === 'Bearer staff-token'
+            ? UserRole.STAFF
+            : UserRole.USER,
     };
     return true;
   }
@@ -63,9 +71,16 @@ class IsolatedRolesGuard implements CanActivate {
       'findMyOrder',
       'createMyOrder',
     ].includes(context.getHandler().name);
-    return protectedForDealer
-      ? request.user?.role === UserRole.USER
-      : request.user?.role === UserRole.ADMIN;
+    if (protectedForDealer) {
+      return request.user?.role === UserRole.USER;
+    }
+    if (['findQueue', 'generateBill'].includes(context.getHandler().name)) {
+      return request.user?.role === UserRole.STAFF;
+    }
+    if (context.getHandler().name === 'findMine') {
+      return request.user?.role !== undefined;
+    }
+    return request.user?.role === UserRole.ADMIN;
   }
 }
 
@@ -84,9 +99,13 @@ describe('Dealer user API (e2e)', () => {
     findAllForAdmin: jest.fn(),
     findOneForAdmin: jest.fn(),
     updateStatusForAdmin: jest.fn(),
+    findBillingQueue: jest.fn(),
+    generateBillForStaff: jest.fn(),
   };
+  const notificationsService = { findMine: jest.fn() };
   const token = { Authorization: 'Bearer test-token' };
   const adminToken = { Authorization: 'Bearer admin-token' };
+  const staffToken = { Authorization: 'Bearer staff-token' };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -169,6 +188,24 @@ describe('Dealer user API (e2e)', () => {
       status: 'APPROVED',
       items: [],
     });
+    ordersService.findBillingQueue.mockResolvedValue([]);
+    ordersService.generateBillForStaff.mockResolvedValue({
+      id: '44444444-4444-4444-4444-444444444444',
+      status: 'BILLED',
+      billGenerated: true,
+      billGeneratedAt: '2026-07-27T10:00:00.000Z',
+      billGeneratedBy: 'staff-1',
+    });
+    notificationsService.findMine.mockResolvedValue([
+      {
+        id: 'notification-1',
+        title: 'Bill Generated',
+        body: 'Your bill has been generated in Tally.',
+        type: 'BILL_GENERATED',
+        isRead: false,
+        createdAt: '2026-07-27T10:00:00.000Z',
+      },
+    ]);
 
     const moduleFixture = await Test.createTestingModule({
       controllers: [
@@ -177,12 +214,15 @@ describe('Dealer user API (e2e)', () => {
         ProfileController,
         OrdersController,
         AdminOrdersController,
+        StaffBillingController,
+        NotificationsController,
       ],
       providers: [
         { provide: ProductsService, useValue: productService },
         { provide: StockService, useValue: stockService },
         { provide: ProfileService, useValue: profileService },
         { provide: OrdersService, useValue: ordersService },
+        { provide: NotificationsService, useValue: notificationsService },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -462,6 +502,80 @@ describe('Dealer user API (e2e)', () => {
       .expect(400);
 
     expect(ordersService.updateStatusForAdmin).not.toHaveBeenCalled();
+  });
+
+  it('allows only staff to confirm a bill generated in Tally', async () => {
+    const orderId = '44444444-4444-4444-4444-444444444444';
+
+    await request(app.getHttpServer())
+      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .set(token)
+      .expect(403);
+    await request(app.getHttpServer())
+      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .set(adminToken)
+      .expect(403);
+
+    const response = await request(app.getHttpServer())
+      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .set(staffToken)
+      .expect(200);
+
+    expect(ordersService.generateBillForStaff).toHaveBeenCalledWith(
+      orderId,
+      'staff-1',
+    );
+    expect(responseData(response)).toMatchObject({
+      status: 'BILLED',
+      billGenerated: true,
+    });
+  });
+
+  it('returns the Tally billing queue to staff only', async () => {
+    await request(app.getHttpServer())
+      .get('/v1/orders/billing-queue')
+      .set(token)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/v1/orders/billing-queue?search=Electrical')
+      .set(staffToken)
+      .expect(200);
+
+    expect(ordersService.findBillingQueue).toHaveBeenCalledWith(
+      expect.objectContaining({ search: 'Electrical' }),
+    );
+  });
+
+  it('lets the dealer read the bill-generated notification', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/v1/notifications/my')
+      .set(token)
+      .expect(200);
+
+    expect(notificationsService.findMine).toHaveBeenCalledWith('dealer-1');
+    expect(responseData(response)).toEqual([
+      expect.objectContaining({
+        title: 'Bill Generated',
+        type: 'BILL_GENERATED',
+      }),
+    ]);
+  });
+
+  it('allows an administrator to view an order marked BILLED', async () => {
+    ordersService.findOneForAdmin.mockResolvedValueOnce({
+      id: '44444444-4444-4444-4444-444444444444',
+      status: 'BILLED',
+      billGenerated: true,
+      items: [],
+    });
+
+    const response = await request(app.getHttpServer())
+      .get('/v1/admin/orders/44444444-4444-4444-4444-444444444444')
+      .set(adminToken)
+      .expect(200);
+
+    expect(responseData(response)).toMatchObject({ status: 'BILLED' });
   });
 
   it('rejects unsupported admin order status values before the service is called', async () => {
