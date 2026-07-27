@@ -5,7 +5,8 @@ export interface LoginResult {
   user: {
     id: string;
     username: string;
+    phone: string;
     role: UserRole;
+    mustChangePassword: boolean;
   };
-  mustChangePassword: boolean;
 }

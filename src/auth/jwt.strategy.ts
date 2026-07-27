@@ -21,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   validate(payload: JwtPayload): JwtPayload {
-    if (!payload.sub || !payload.role) {
+    if (!payload.sub || !payload.username || !payload.role) {
       throw new UnauthorizedException('Invalid access token.');
     }
     return payload;
