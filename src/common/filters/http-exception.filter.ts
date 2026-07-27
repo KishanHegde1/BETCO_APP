@@ -26,6 +26,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const message = isHttpException
       ? this.getMessage(exceptionResponse, exception)
       : 'Internal server error';
+    const code = isHttpException
+      ? this.getCode(exceptionResponse, status)
+      : 'SERVER_ERROR';
     const requestId = String(response.getHeader('x-request-id') ?? 'unknown');
 
     if (!isHttpException) {
@@ -40,10 +43,32 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     response.status(status).json({
       success: false,
+      statusCode: status,
+      code,
       message,
       data: { path: request.url },
       timestamp: new Date().toISOString(),
     });
+  }
+
+  private getCode(
+    response: string | object | undefined,
+    status: number,
+  ): string {
+    if (response && typeof response === 'object' && 'code' in response) {
+      const code = response.code;
+      if (typeof code === 'string' && code.trim().length > 0) {
+        return code;
+      }
+    }
+    const defaultCodes: Record<number, string> = {
+      [HttpStatus.BAD_REQUEST]: 'VALIDATION_ERROR',
+      [HttpStatus.UNAUTHORIZED]: 'UNAUTHORIZED',
+      [HttpStatus.FORBIDDEN]: 'FORBIDDEN',
+      [HttpStatus.NOT_FOUND]: 'NOT_FOUND',
+      [HttpStatus.CONFLICT]: 'CONFLICT',
+    };
+    return defaultCodes[status] ?? 'SERVER_ERROR';
   }
 
   private getMessage(

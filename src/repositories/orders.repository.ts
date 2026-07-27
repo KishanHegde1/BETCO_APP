@@ -71,14 +71,28 @@ export interface StaffBillingQueueItemRow {
 
 export interface StaffBillingQueueOrderRow {
   id: string;
+  orderId: string;
   orderNumber: string;
   status: OrderStatus;
+  orderStatus: OrderStatus;
   dealerName: string;
   dealerPhone: string | null;
   createdAt: Date;
+  orderDate: Date;
+  billGeneratedAt: Date | null;
+  billGeneratedByName: string | null;
   totalItems: number;
   totalQuantity: number;
+  totalRequestedQuantity: number;
   totalApprovedQuantity: number;
+  dealer: {
+    dealerId: string;
+    businessName: string;
+    shopName: string | null;
+    phone: string | null;
+    contactNumber: string | null;
+    address: string | null;
+  };
   items: StaffBillingQueueItemRow[];
 }
 
@@ -172,6 +186,22 @@ export class OrdersRepository {
   async findStaffBillingQueue(
     options: StaffBillingQueueQueryDto,
   ): Promise<StaffBillingQueueOrderRow[]> {
+    return this.findStaffOrders(
+      [OrderStatus.APPROVED, OrderStatus.PARTIALLY_FULFILLED],
+      options,
+    );
+  }
+
+  async findStaffBilledOrders(
+    options: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrderRow[]> {
+    return this.findStaffOrders([OrderStatus.BILLED], options);
+  }
+
+  private async findStaffOrders(
+    statuses: OrderStatus[],
+    options: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrderRow[]> {
     const query = this.adminBaseQuery()
       .innerJoin(OrderItem, 'orderItem', 'orderItem.order_id = "order".id')
       .innerJoin(Product, 'product', 'product.id = orderItem.product_id')
@@ -179,8 +209,16 @@ export class OrdersRepository {
         '"order".id AS "orderId"',
         '"order".status AS "status"',
         '"order".created_at AS "createdAt"',
+        '"order".bill_generated_at AS "billGeneratedAt"',
+        'billGenerator.username AS "billGeneratedByName"',
+        'dealer.id AS "dealerId"',
         'COALESCE(NULLIF(dealer.business_name, \'\'), "user".username) AS "dealerName"',
         'COALESCE(dealer.phone, "user".phone) AS "dealerPhone"',
+        'dealer.business_name AS "businessName"',
+        'dealer.shop_name AS "shopName"',
+        'dealer.phone AS "phone"',
+        'dealer.contact_number AS "contactNumber"',
+        'dealer.address AS "address"',
         'orderItem.product_id AS "productId"',
         'product.name AS "productName"',
         'product.sku AS "sku"',
@@ -189,7 +227,7 @@ export class OrdersRepository {
         'orderItem.approved_quantity AS "approvedQuantity"',
       ])
       .where('"order".status IN (:...statuses)', {
-        statuses: [OrderStatus.APPROVED, OrderStatus.PARTIALLY_FULFILLED],
+        statuses,
       });
 
     const search = options.search?.trim();
@@ -220,8 +258,16 @@ export class OrdersRepository {
         orderId: string;
         status: OrderStatus;
         createdAt: Date;
+        billGeneratedAt: Date | null;
+        billGeneratedByName: string | null;
+        dealerId: string;
         dealerName: string;
         dealerPhone: string | null;
+        businessName: string;
+        shopName: string | null;
+        phone: string | null;
+        contactNumber: string | null;
+        address: string | null;
         productId: string;
         productName: string;
         sku: string;
@@ -236,14 +282,28 @@ export class OrdersRepository {
       if (!order) {
         order = {
           id: row.orderId,
+          orderId: row.orderId,
           orderNumber: row.orderId,
           status: row.status,
+          orderStatus: row.status,
           dealerName: row.dealerName,
           dealerPhone: row.dealerPhone,
           createdAt: row.createdAt,
+          orderDate: row.createdAt,
+          billGeneratedAt: row.billGeneratedAt,
+          billGeneratedByName: row.billGeneratedByName,
           totalItems: 0,
           totalQuantity: 0,
+          totalRequestedQuantity: 0,
           totalApprovedQuantity: 0,
+          dealer: {
+            dealerId: row.dealerId,
+            businessName: row.businessName,
+            shopName: row.shopName,
+            phone: row.phone,
+            contactNumber: row.contactNumber,
+            address: row.address,
+          },
           items: [],
         };
         ordersById.set(row.orderId, order);
@@ -262,6 +322,7 @@ export class OrdersRepository {
       });
       order.totalItems += 1;
       order.totalQuantity += requestedQuantity;
+      order.totalRequestedQuantity += requestedQuantity;
       order.totalApprovedQuantity += approvedQuantity ?? 0;
     }
     return [...ordersById.values()];
@@ -279,8 +340,8 @@ export class OrdersRepository {
         '"order".id AS "id"',
         '"order".dealer_id AS "dealerId"',
         '"user".username AS "dealerUsername"',
-        'dealer.business_name AS "shopName"',
-        'COALESCE(dealer.phone, "user".phone) AS "contactNumber"',
+        'COALESCE(dealer.shop_name, dealer.business_name) AS "shopName"',
+        'COALESCE(dealer.contact_number, dealer.phone, "user".phone) AS "contactNumber"',
         'dealer.address AS "address"',
         '"order".remarks AS "remarks"',
         '"order".admin_remarks AS "adminRemarks"',
@@ -374,8 +435,8 @@ export class OrdersRepository {
         '"order".id AS "id"',
         '"order".dealer_id AS "dealerId"',
         '"user".username AS "dealerUsername"',
-        'dealer.business_name AS "shopName"',
-        'COALESCE(dealer.phone, "user".phone) AS "contactNumber"',
+        'COALESCE(dealer.shop_name, dealer.business_name) AS "shopName"',
+        'COALESCE(dealer.contact_number, dealer.phone, "user".phone) AS "contactNumber"',
         '"order".status AS "status"',
         '"order".created_at AS "createdAt"',
         'COUNT(orderItem.id) AS "totalItems"',
@@ -386,7 +447,9 @@ export class OrdersRepository {
       .addGroupBy('"order".dealer_id')
       .addGroupBy('"user".username')
       .addGroupBy('dealer.business_name')
+      .addGroupBy('dealer.shop_name')
       .addGroupBy('dealer.phone')
+      .addGroupBy('dealer.contact_number')
       .addGroupBy('"user".phone');
   }
 

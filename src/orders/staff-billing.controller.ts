@@ -30,13 +30,13 @@ import {
 /** Staff can only confirm that a bill already exists in Tally. */
 @ApiBearerAuth()
 @ApiTags('Staff Billing')
-@Controller({ path: 'orders', version: '1' })
+@Controller({ path: 'staff/orders', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.STAFF)
 export class StaffBillingController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get('billing-queue')
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
   @ApiOperation({
     summary:
       'List approved orders waiting for staff Tally billing confirmation',
@@ -47,7 +47,17 @@ export class StaffBillingController {
     return this.ordersService.findBillingQueue(query);
   }
 
-  @Patch(':id/generate-bill')
+  @Get('billed')
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @ApiOperation({ summary: 'List orders already marked billed in Tally' })
+  findBilled(
+    @Query() query: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrder[]> {
+    return this.ordersService.findBilledOrdersForStaff(query);
+  }
+
+  @Patch(':orderId/mark-billed')
+  @Roles(UserRole.STAFF)
   @ApiOperation({
     summary: 'Confirm that the order bill has been generated in Tally',
   })
@@ -55,7 +65,7 @@ export class StaffBillingController {
     description: 'The order was marked BILLED and the dealer notified.',
   })
   generateBill(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('orderId', new ParseUUIDPipe()) id: string,
     @Req() request: { user: JwtPayload },
   ): Promise<BillGenerationResponse> {
     return this.ordersService.generateBillForStaff(id, request.user.sub);

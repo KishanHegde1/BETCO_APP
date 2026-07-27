@@ -29,12 +29,29 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   @Transform(trimString)
+  @MaxLength(255)
+  @Matches(/\S/, { message: 'Business name cannot be blank.' })
+  businessName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(trimString)
   @MaxLength(20)
   @Matches(/^(?=(?:\D*\d){10,15}\D*$)[0-9+() -]+$/, {
     message:
       'Contact number must contain 10 to 15 digits and use only phone characters.',
   })
   contactNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(trimString)
+  @MaxLength(20)
+  @Matches(/^(?=(?:\D*\d){10,15}\D*$)[0-9+() -]+$/, {
+    message:
+      'Phone number must contain 10 to 15 digits and use only phone characters.',
+  })
+  phone?: string;
 
   @IsOptional()
   @IsString()

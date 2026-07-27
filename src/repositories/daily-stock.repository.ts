@@ -14,6 +14,8 @@ export interface TodayStockItem {
   categoryId: string;
   categoryName: string;
   quantity: number;
+  /** Latest stock row used to resolve the current balance. */
+  stockDate: string | null;
   sourceStockDate: string | null;
   isCarriedForward: boolean;
   isAvailable: boolean;
@@ -180,6 +182,7 @@ export class DailyStockRepository {
       categoryId: row.categoryId,
       categoryName: row.categoryName,
       quantity: this.quantity(row),
+      stockDate: row.sourceStockDate,
       sourceStockDate: row.sourceStockDate,
       isCarriedForward: this.boolean(row.isCarriedForward),
       isAvailable: this.boolean(row.isAvailable),

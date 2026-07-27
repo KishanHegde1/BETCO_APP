@@ -19,6 +19,7 @@ import { ProductsController } from '../src/products/products.controller';
 import { ProductsService } from '../src/products/products.service';
 import { ProfileController } from '../src/profile/profile.controller';
 import { ProfileService } from '../src/profile/profile.service';
+import { UserProfileController } from '../src/profile/user-profile.controller';
 import { StockController } from '../src/stock/stock.controller';
 import { StockService } from '../src/stock/stock.service';
 import { AdminOrdersController } from '../src/orders/admin-orders.controller';
@@ -74,7 +75,13 @@ class IsolatedRolesGuard implements CanActivate {
     if (protectedForDealer) {
       return request.user?.role === UserRole.USER;
     }
-    if (['findQueue', 'generateBill'].includes(context.getHandler().name)) {
+    if (['findQueue', 'findBilled'].includes(context.getHandler().name)) {
+      return (
+        request.user?.role === UserRole.STAFF ||
+        request.user?.role === UserRole.ADMIN
+      );
+    }
+    if (context.getHandler().name === 'generateBill') {
       return request.user?.role === UserRole.STAFF;
     }
     if (context.getHandler().name === 'findMine') {
@@ -100,6 +107,7 @@ describe('Dealer user API (e2e)', () => {
     findOneForAdmin: jest.fn(),
     updateStatusForAdmin: jest.fn(),
     findBillingQueue: jest.fn(),
+    findBilledOrdersForStaff: jest.fn(),
     generateBillForStaff: jest.fn(),
   };
   const notificationsService = { findMine: jest.fn() };
@@ -189,6 +197,7 @@ describe('Dealer user API (e2e)', () => {
       items: [],
     });
     ordersService.findBillingQueue.mockResolvedValue([]);
+    ordersService.findBilledOrdersForStaff.mockResolvedValue([]);
     ordersService.generateBillForStaff.mockResolvedValue({
       id: '44444444-4444-4444-4444-444444444444',
       status: 'BILLED',
@@ -212,6 +221,7 @@ describe('Dealer user API (e2e)', () => {
         ProductsController,
         StockController,
         ProfileController,
+        UserProfileController,
         OrdersController,
         AdminOrdersController,
         StaffBillingController,
@@ -309,6 +319,24 @@ describe('Dealer user API (e2e)', () => {
       username: 'updated_dealer',
       shopName: 'Updated Electricals',
     });
+  });
+
+  it('supports the canonical JWT-only current-user profile route', async () => {
+    await request(app.getHttpServer())
+      .get('/v1/users/me/profile')
+      .set(token)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .put('/v1/users/me/profile')
+      .set(token)
+      .send({ shopName: 'Canonical Electricals', contactNumber: '9876543210' })
+      .expect(200);
+
+    expect(profileService.updateProfile).toHaveBeenCalledWith(
+      'dealer-1',
+      expect.objectContaining({ shopName: 'Canonical Electricals' }),
+    );
   });
 
   it('rejects protected fields and invalid dealer profile input', async () => {
@@ -508,16 +536,16 @@ describe('Dealer user API (e2e)', () => {
     const orderId = '44444444-4444-4444-4444-444444444444';
 
     await request(app.getHttpServer())
-      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .patch(`/v1/staff/orders/${orderId}/mark-billed`)
       .set(token)
       .expect(403);
     await request(app.getHttpServer())
-      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .patch(`/v1/staff/orders/${orderId}/mark-billed`)
       .set(adminToken)
       .expect(403);
 
     const response = await request(app.getHttpServer())
-      .patch(`/v1/orders/${orderId}/generate-bill`)
+      .patch(`/v1/staff/orders/${orderId}/mark-billed`)
       .set(staffToken)
       .expect(200);
 
@@ -533,12 +561,12 @@ describe('Dealer user API (e2e)', () => {
 
   it('returns the Tally billing queue to staff only', async () => {
     await request(app.getHttpServer())
-      .get('/v1/orders/billing-queue')
+      .get('/v1/staff/orders/billing-queue')
       .set(token)
       .expect(403);
 
     await request(app.getHttpServer())
-      .get('/v1/orders/billing-queue?search=Electrical')
+      .get('/v1/staff/orders/billing-queue?search=Electrical')
       .set(staffToken)
       .expect(200);
 

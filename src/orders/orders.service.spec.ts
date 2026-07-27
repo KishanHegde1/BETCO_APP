@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Dealer } from '../entities/dealer.entity';
@@ -165,7 +161,7 @@ describe('OrdersService', () => {
       service.createMyOrder('user-1', {
         items: [{ productId: 'product-1', quantity: 3 }],
       }),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({ code: 'INSUFFICIENT_STOCK' });
 
     expect(orderRepository.save).not.toHaveBeenCalled();
     expect(orderItemsRepository.save).not.toHaveBeenCalled();
@@ -178,7 +174,7 @@ describe('OrdersService', () => {
       service.createMyOrder('user-1', {
         items: [{ productId: 'product-1', quantity: 1 }],
       }),
-    ).rejects.toBeInstanceOf(NotFoundException);
+    ).rejects.toMatchObject({ code: 'DEALER_PROFILE_MISSING' });
 
     expect(dealerRepository.create).not.toHaveBeenCalled();
     expect(orderRepository.save).not.toHaveBeenCalled();
@@ -483,7 +479,7 @@ describe('OrdersService', () => {
 
     await expect(
       service.findOneForDealer('user-1', 'order-2'),
-    ).rejects.toBeInstanceOf(NotFoundException);
+    ).rejects.toMatchObject({ code: 'ORDER_NOT_FOUND' });
     expect(ordersRepository.findDealerById).toHaveBeenCalledWith(
       'order-2',
       'dealer-1',
@@ -512,7 +508,7 @@ describe('OrdersService', () => {
       service.createMyOrder('user-1', {
         items: [{ productId: 'product-1', quantity: 1 }],
       }),
-    ).rejects.toBeInstanceOf(NotFoundException);
+    ).rejects.toMatchObject({ code: 'PRODUCT_NOT_FOUND' });
 
     expect(orderRepository.save).not.toHaveBeenCalled();
   });
@@ -527,7 +523,7 @@ describe('OrdersService', () => {
       service.createMyOrder('user-1', {
         items: [{ productId: 'product-1', quantity: 1 }],
       }),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).rejects.toMatchObject({ code: 'PRODUCT_INACTIVE' });
 
     expect(orderRepository.save).not.toHaveBeenCalled();
     expect(orderItemsRepository.save).not.toHaveBeenCalled();
@@ -592,7 +588,7 @@ describe('OrdersService', () => {
 
     await expect(
       service.generateBillForStaff('order-1', 'staff-user-1'),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({ code: 'ORDER_ALREADY_BILLED' });
 
     expect(orderRepository.save).not.toHaveBeenCalled();
     expect(notificationsService.create).not.toHaveBeenCalled();
@@ -607,7 +603,7 @@ describe('OrdersService', () => {
 
     await expect(
       service.generateBillForStaff('order-1', 'staff-user-1'),
-    ).rejects.toBeInstanceOf(ConflictException);
+    ).rejects.toMatchObject({ code: 'ORDER_NOT_READY_FOR_BILLING' });
 
     expect(orderRepository.save).not.toHaveBeenCalled();
     expect(notificationsService.create).not.toHaveBeenCalled();

@@ -11,8 +11,14 @@ export class Dealer extends BaseEntity {
   @Column({ name: 'business_name', length: 255 })
   businessName!: string;
 
+  @Column({ name: 'shop_name', nullable: true, length: 255 })
+  shopName?: string;
+
   @Column({ nullable: true, length: 32 })
   phone?: string;
+
+  @Column({ name: 'contact_number', nullable: true, length: 32 })
+  contactNumber?: string;
 
   @Column({ type: 'text', nullable: true })
   address!: string | null;

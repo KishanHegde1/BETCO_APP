@@ -16,7 +16,15 @@ export class DealersService {
   }
 
   create(
-    values: Pick<Dealer, 'userId' | 'businessName' | 'phone' | 'address'>,
+    values: Pick<
+      Dealer,
+      | 'userId'
+      | 'businessName'
+      | 'shopName'
+      | 'phone'
+      | 'contactNumber'
+      | 'address'
+    >,
   ): Dealer {
     return this.dealersRepository.repository.create(values);
   }

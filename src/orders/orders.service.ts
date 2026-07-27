@@ -7,6 +7,14 @@ import {
 import { LessThanOrEqual, Repository } from 'typeorm';
 
 import { DailyStock } from '../entities/daily-stock.entity';
+import {
+  ApiErrorException,
+  dealerProfileMissing,
+  insufficientStock,
+  orderNotFound,
+  productInactive,
+  productNotFound,
+} from '../common/exceptions/api-error.exception';
 import { Dealer } from '../entities/dealer.entity';
 import { NotificationType } from '../entities/notification.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
@@ -31,8 +39,15 @@ import { StaffBillingQueueQueryDto } from './dto/staff-billing-queue-query.dto';
 
 export interface OrderHistoryResponse {
   id: string;
+  orderId: string;
+  /** Existing orders use the UUID as their stable customer-facing reference. */
+  orderNumber: string;
   status: OrderStatus;
   createdAt: Date;
+  updatedAt: Date;
+  cancellationReason: string | null;
+  billGenerated: boolean;
+  billGeneratedAt: Date | null;
   totalItems: number;
   totalQuantity: number;
   totalApprovedQuantity: number | null;
@@ -94,7 +109,9 @@ export class OrdersService {
   async findMyOrders(userId: string): Promise<OrderHistoryResponse[]> {
     const dealer = await this.dealersRepository.findByUserId(userId);
     if (!dealer) {
-      throw new NotFoundException('Dealer profile not found for this account.');
+      // A USER can exist before their dealer profile is completed. There are
+      // simply no orders to return until the profile is created.
+      return [];
     }
 
     const orders = await this.ordersRepository.findByDealerId(dealer.id);
@@ -107,8 +124,14 @@ export class OrdersService {
 
     return orders.map((order) => ({
       id: order.id,
+      orderId: order.id,
+      orderNumber: order.id,
       status: order.status,
       createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      cancellationReason: order.cancellationReason ?? null,
+      billGenerated: order.billGenerated,
+      billGeneratedAt: order.billGeneratedAt ?? null,
       totalItems: totalsByOrderId.get(order.id)?.totalItems ?? 0,
       totalQuantity: totalsByOrderId.get(order.id)?.totalQuantity ?? 0,
       totalApprovedQuantity:
@@ -122,11 +145,11 @@ export class OrdersService {
   ): Promise<DealerOrderDetailsResponse> {
     const dealer = await this.dealersRepository.findByUserId(userId);
     if (!dealer) {
-      throw new NotFoundException('Dealer profile not found for this account.');
+      throw orderNotFound();
     }
     const order = await this.ordersRepository.findDealerById(id, dealer.id);
     if (!order) {
-      throw new NotFoundException('Order not found.');
+      throw orderNotFound();
     }
     return order;
   }
@@ -149,9 +172,7 @@ export class OrdersService {
       const dealerRepository = manager.getRepository(Dealer);
       const dealer = await dealerRepository.findOneBy({ userId });
       if (!dealer) {
-        throw new NotFoundException(
-          'Dealer profile not found for this account. Please contact Betco.',
-        );
+        throw dealerProfileMissing();
       }
 
       const stockRepository = manager.getRepository(DailyStock);
@@ -162,14 +183,10 @@ export class OrdersService {
           id: item.productId,
         });
         if (!product) {
-          throw new NotFoundException(
-            'One of the selected products was not found.',
-          );
+          throw productNotFound();
         }
         if (!product.isActive) {
-          throw new BadRequestException(
-            'One of the selected products is inactive.',
-          );
+          throw productInactive();
         }
 
         const stock = await this.findStockAsOf(
@@ -178,9 +195,7 @@ export class OrdersService {
           orderDate,
         );
         if (!stock || stock.quantity < item.quantity) {
-          throw new ConflictException(
-            `${product.name} has no saved stock or no longer has enough stock.`,
-          );
+          throw insufficientStock();
         }
 
         bookedItems.push({
@@ -219,12 +234,18 @@ export class OrdersService {
 
       return {
         id: order.id,
+        orderId: order.id,
+        orderNumber: order.id,
         status: order.status,
+        updatedAt: order.updatedAt,
+        cancellationReason: order.cancellationReason ?? null,
+        billGenerated: order.billGenerated,
+        billGeneratedAt: order.billGeneratedAt ?? null,
         remarks: order.remarks ?? null,
         dealer: {
           id: dealer.id,
           businessName: dealer.businessName,
-          shopName: dealer.businessName,
+          shopName: dealer.shopName ?? dealer.businessName,
         },
         createdAt: order.createdAt,
         totalItems: items.length,
@@ -278,13 +299,22 @@ export class OrdersService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!order) {
-        throw new NotFoundException('Order not found.');
+        throw orderNotFound();
+      }
+      if (order.status === OrderStatus.BILLED) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_ALREADY_BILLED',
+          'This order has already been marked billed.',
+        );
       }
       if (
         order.status !== OrderStatus.APPROVED &&
         order.status !== OrderStatus.PARTIALLY_FULFILLED
       ) {
-        throw new ConflictException(
+        throw new ApiErrorException(
+          409,
+          'ORDER_NOT_READY_FOR_BILLING',
           'Only approved or partially fulfilled orders can be marked billed.',
         );
       }
@@ -321,6 +351,12 @@ export class OrdersService {
         billGeneratedBy: staffUserId,
       };
     });
+  }
+
+  findBilledOrdersForStaff(
+    query: StaffBillingQueueQueryDto,
+  ): Promise<StaffBillingQueueOrder[]> {
+    return this.ordersRepository.findStaffBilledOrders(query);
   }
 
   async updateStatusForAdmin(
