@@ -19,9 +19,12 @@ export class UsersRepository {
   }
 
   findByUsername(username: string): Promise<User | null> {
-    return this.repository.findOne({
-      where: { username: ILike(username.trim()) },
-    });
+    return this.repository
+      .createQueryBuilder('user')
+      .where('LOWER(TRIM(user.username)) = LOWER(TRIM(:username))', {
+        username,
+      })
+      .getOne();
   }
 
   findByPhone(phone: string): Promise<User | null> {

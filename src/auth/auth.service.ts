@@ -36,7 +36,7 @@ export class AuthService {
 
     if (this.configService.get<boolean>('app.authDiagnostics')) {
       this.logger.log(
-        `AUTH_LOGIN_DIAGNOSTIC normalizedUsername=${normalizedUsername} userFound=${user !== null} role=${user?.role ?? 'none'} isActive=${user?.isActive ?? 'none'} bcryptCompareSucceeded=${isPasswordValid}`,
+        `AUTH_LOGIN_DIAGNOSTIC normalizedUsername=${normalizedUsername} userFound=${user !== null} userId=${user?.id ?? 'none'} role=${user?.role ?? 'none'} isActive=${user?.isActive ?? 'none'} passwordHashLoaded=${Boolean(user?.passwordHash)} passwordHashLength=${user?.passwordHash.length ?? 0} bcryptCompareSucceeded=${isPasswordValid}`,
       );
     }
 

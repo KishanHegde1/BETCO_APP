@@ -44,14 +44,6 @@ async function bootstrap(): Promise<void> {
     app.get(LoggingInterceptor),
     app.get(ResponseInterceptor),
   );
-const swaggerEnabled = configService.get<boolean>('swagger.enabled');
-
-console.log('SWAGGER_ENABLED:', process.env.SWAGGER_ENABLED);
-console.log('swagger.enabled:', swaggerEnabled);
-
-if (swaggerEnabled) {
-  // existing Swagger setup
-}
   if (configService.get<boolean>('swagger.enabled')) {
     const swaggerConfig = new DocumentBuilder()
       .setTitle('Betco Traders API')
