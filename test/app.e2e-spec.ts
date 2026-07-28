@@ -76,10 +76,7 @@ class IsolatedRolesGuard implements CanActivate {
       return request.user?.role === UserRole.USER;
     }
     if (['findQueue', 'findBilled'].includes(context.getHandler().name)) {
-      return (
-        request.user?.role === UserRole.STAFF ||
-        request.user?.role === UserRole.ADMIN
-      );
+      return request.user?.role === UserRole.STAFF;
     }
     if (context.getHandler().name === 'generateBill') {
       return request.user?.role === UserRole.STAFF;
@@ -563,6 +560,11 @@ describe('Dealer user API (e2e)', () => {
     await request(app.getHttpServer())
       .get('/v1/staff/orders/billing-queue')
       .set(token)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/v1/staff/orders/billing-queue')
+      .set(adminToken)
       .expect(403);
 
     await request(app.getHttpServer())

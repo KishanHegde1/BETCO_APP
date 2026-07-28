@@ -36,7 +36,7 @@ export class StaffBillingController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get('billing-queue')
-  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @Roles(UserRole.STAFF)
   @ApiOperation({
     summary:
       'List approved orders waiting for staff Tally billing confirmation',
@@ -48,7 +48,7 @@ export class StaffBillingController {
   }
 
   @Get('billed')
-  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @Roles(UserRole.STAFF)
   @ApiOperation({ summary: 'List orders already marked billed in Tally' })
   findBilled(
     @Query() query: StaffBillingQueueQueryDto,

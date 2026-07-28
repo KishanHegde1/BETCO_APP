@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { Category } from '../entities/category.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
+import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 
 export interface AdminDashboardSummary {
@@ -26,14 +27,12 @@ export class AdminDashboardService {
     private readonly categories: Repository<Category>,
     @InjectRepository(Product)
     private readonly products: Repository<Product>,
-    @InjectRepository(DailyStock)
-    private readonly stocks: Repository<DailyStock>,
     @InjectRepository(Order) private readonly orders: Repository<Order>,
   ) {}
 
   async getSummary(): Promise<AdminDashboardSummary> {
     const today = this.getIndianCalendarDate();
-    const [categories, products, stock, noStock, orders] = await Promise.all([
+    const [categories, products, stock, orders, booked] = await Promise.all([
       this.categories
         .createQueryBuilder('category')
         .select('COUNT(*)', 'count')
@@ -50,24 +49,47 @@ export class AdminDashboardService {
           'inactiveCount',
         )
         .getRawOne<{ activeCount: string; inactiveCount: string }>(),
-      this.stocks
-        .createQueryBuilder('stock')
-        .select('COUNT(*) FILTER (WHERE stock.quantity > 0)', 'withStock')
-        .addSelect('COALESCE(SUM(stock.quantity), 0)', 'available')
-        .where('stock.stock_date = :today', { today })
-        .getRawOne<{ withStock: string; available: string }>(),
       this.products
         .createQueryBuilder('product')
-        .leftJoin(
-          DailyStock,
-          'stock',
-          'stock.product_id = product.id AND stock.stock_date = :today',
-          { today },
+        .innerJoin(
+          Category,
+          'category',
+          'category.id = product.category_id AND category.is_active = true',
         )
-        .select('COUNT(*)', 'count')
+        .leftJoin(
+          (subQuery) =>
+            subQuery
+              .select('stock_source.product_id', 'productId')
+              .addSelect('stock_source.quantity', 'quantity')
+              .from(DailyStock, 'stock_source')
+              .where('stock_source.stock_date <= :stockDate', {
+                stockDate: today,
+              })
+              .distinctOn(['stock_source.product_id'])
+              .orderBy('stock_source.product_id', 'ASC')
+              .addOrderBy('stock_source.stock_date', 'DESC'),
+          'stock',
+          'stock."productId" = product.id',
+        )
+        .select(
+          'COUNT(*) FILTER (WHERE COALESCE(stock.quantity, 0) > 0)',
+          'withStock',
+        )
+        .addSelect(
+          'COUNT(*) FILTER (WHERE COALESCE(stock.quantity, 0) <= 0)',
+          'withoutStock',
+        )
+        .addSelect(
+          'COALESCE(SUM(GREATEST(COALESCE(stock.quantity, 0), 0)), 0)',
+          'available',
+        )
         .where('product.is_active = true')
-        .andWhere('stock.id IS NULL')
-        .getRawOne<{ count: string }>(),
+        .setParameter('stockDate', today)
+        .getRawOne<{
+          withStock: string;
+          withoutStock: string;
+          available: string;
+        }>(),
       this.orders
         .createQueryBuilder('order')
         .select('COUNT(*)', 'todayCount')
@@ -83,6 +105,23 @@ export class AdminDashboardService {
         )
         .setParameter('pending', OrderStatus.PENDING)
         .getRawOne<{ todayCount: string; pendingCount: string }>(),
+      this.orders
+        .createQueryBuilder('order')
+        .innerJoin(OrderItem, 'item', 'item.order_id = order.id')
+        .select('COALESCE(SUM(item.approved_quantity), 0)', 'quantity')
+        .where(
+          "(order.reviewed_at AT TIME ZONE 'Asia/Kolkata')::date = :today",
+          { today },
+        )
+        .andWhere('order.status IN (:...stockDeductedStatuses)', {
+          stockDeductedStatuses: [
+            OrderStatus.APPROVED,
+            OrderStatus.PARTIALLY_FULFILLED,
+            OrderStatus.BILLED,
+            OrderStatus.COMPLETED,
+          ],
+        })
+        .getRawOne<{ quantity: string }>(),
     ]);
 
     return {
@@ -90,9 +129,9 @@ export class AdminDashboardService {
       activeProductCount: Number(products?.activeCount ?? 0),
       inactiveProductCount: Number(products?.inactiveCount ?? 0),
       productsWithStockToday: Number(stock?.withStock ?? 0),
-      activeProductsWithoutStockToday: Number(noStock?.count ?? 0),
+      activeProductsWithoutStockToday: Number(stock?.withoutStock ?? 0),
       totalAvailableQuantityToday: Number(stock?.available ?? 0),
-      totalBookedQuantityToday: 0,
+      totalBookedQuantityToday: Number(booked?.quantity ?? 0),
       dealerOrdersToday: Number(orders?.todayCount ?? 0),
       pendingOrderCount: Number(orders?.pendingCount ?? 0),
     };

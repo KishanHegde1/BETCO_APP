@@ -55,18 +55,14 @@ describe('AuthService', () => {
     });
 
     expect(usersService.findByUsername).toHaveBeenCalledWith('Staff');
-    expect(result).toEqual(
-      expect.objectContaining({
-        accessToken: expect.any(String),
-        user: {
-          id: 'staff-1',
-          username: 'Staff',
-          phone: '9876543211',
-          role: UserRole.STAFF,
-          mustChangePassword: true,
-        },
-      }),
-    );
+    expect(typeof result.accessToken).toBe('string');
+    expect(result.user).toEqual({
+      id: 'staff-1',
+      username: 'Staff',
+      phone: '9876543211',
+      role: UserRole.STAFF,
+      mustChangePassword: true,
+    });
     expect(JSON.stringify(result)).not.toContain(staffUser.passwordHash);
   });
 
