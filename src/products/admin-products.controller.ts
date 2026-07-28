@@ -9,10 +9,14 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
   UseGuards,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -32,6 +36,7 @@ import {
   PaginatedProductsResponse,
   ProductsService,
 } from './products.service';
+import type { UploadedProductSpreadsheet } from './products.service';
 
 @ApiTags('Admin Products')
 @ApiBearerAuth()
@@ -60,6 +65,38 @@ export class AdminProductsController {
   @ApiOperation({ summary: 'Create a catalogue product' })
   create(@Body() dto: CreateAdminProductDto): Promise<AdminProductResponse> {
     return this.productsService.createForAdmin(dto);
+  }
+
+  @Post('import/validate')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Validate a product .xlsx file without importing it',
+  })
+  validateImport(@UploadedFile() file?: unknown) {
+    return this.productsService.validateImport(
+      file as UploadedProductSpreadsheet,
+    );
+  }
+
+  @Post('import')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Import validated catalogue products from a .xlsx file',
+  })
+  importSpreadsheet(@UploadedFile() file?: unknown) {
+    return this.productsService.import(file as UploadedProductSpreadsheet);
   }
 
   @Patch(':id')
