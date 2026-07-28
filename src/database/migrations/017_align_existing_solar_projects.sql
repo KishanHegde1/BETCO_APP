@@ -1,6 +1,13 @@
 -- Run this after the initial two CREATE TABLE statements already executed in Neon.
 -- It is idempotent and does not drop or recreate any existing data.
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+ALTER TABLE solar_projects
+  ALTER COLUMN id SET DEFAULT gen_random_uuid();
+ALTER TABLE solar_project_media
+  ALTER COLUMN id SET DEFAULT gen_random_uuid();
+
 ALTER TABLE solar_projects
   ADD COLUMN IF NOT EXISTS category VARCHAR(120) NOT NULL DEFAULT 'Solar installation',
   ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'PUBLISHED';
