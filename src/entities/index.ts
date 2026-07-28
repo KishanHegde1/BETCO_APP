@@ -9,4 +9,6 @@ export * from './notification.entity';
 export * from './order-item.entity';
 export * from './order.entity';
 export * from './product.entity';
+export * from './solar-project-media.entity';
+export * from './solar-project.entity';
 export * from './user.entity';

@@ -20,6 +20,12 @@ export interface ApplicationConfiguration {
     connectorId?: string;
     connectorSecret?: string;
   };
+  cloudinary: {
+    cloudName?: string;
+    apiKey?: string;
+    apiSecret?: string;
+    folder: string;
+  };
 }
 
 export default (): ApplicationConfiguration => {
@@ -55,6 +61,13 @@ export default (): ApplicationConfiguration => {
     tally: {
       connectorId: process.env.TALLY_CONNECTOR_ID,
       connectorSecret: process.env.TALLY_CONNECTOR_SECRET,
+    },
+    cloudinary: {
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      apiKey: process.env.CLOUDINARY_API_KEY,
+      apiSecret: process.env.CLOUDINARY_API_SECRET,
+      folder:
+        process.env.CLOUDINARY_SOLAR_PROJECTS_FOLDER ?? 'betco/solar-projects',
     },
   };
 };

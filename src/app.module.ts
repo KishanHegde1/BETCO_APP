@@ -22,6 +22,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { ProductsModule } from './products/products.module';
 import { ProfileModule } from './profile/profile.module';
 import { StockModule } from './stock/stock.module';
+import { SolarProjectsModule } from './solar-projects/solar-projects.module';
 import { TallyModule } from './tally/tally.module';
 import { UsersModule } from './users/users.module';
 
@@ -43,6 +44,7 @@ import { UsersModule } from './users/users.module';
     CategoriesModule,
     ProductsModule,
     StockModule,
+    SolarProjectsModule,
     OrdersModule,
     BillingModule,
     PaymentsModule,
