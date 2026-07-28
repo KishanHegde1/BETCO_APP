@@ -2,8 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
 
-import { DatabaseDiagnosticsService } from './database-diagnostics.service';
-
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
@@ -32,6 +30,5 @@ import { DatabaseDiagnosticsService } from './database-diagnostics.service';
       },
     }),
   ],
-  providers: [DatabaseDiagnosticsService],
 })
 export class DatabaseModule {}

@@ -3,7 +3,6 @@ export interface ApplicationConfiguration {
     port: number;
     nodeEnv: string;
     corsOrigin: string;
-    authDiagnostics: boolean;
   };
   swagger: {
     enabled: boolean;
@@ -31,9 +30,6 @@ export default (): ApplicationConfiguration => {
       nodeEnv,
       corsOrigin:
         process.env.CORS_ORIGIN ?? (nodeEnv === 'production' ? '' : '*'),
-      // Enable temporarily on Render while diagnosing a login problem. The
-      // emitted fields never include a password, hash, or token.
-      authDiagnostics: process.env.AUTH_DIAGNOSTICS === 'true',
     },
     swagger: {
       enabled:

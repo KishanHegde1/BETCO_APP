@@ -54,10 +54,6 @@ class EnvironmentVariables {
   SWAGGER_ENABLED?: string;
 
   @IsOptional()
-  @IsIn(['true', 'false'])
-  AUTH_DIAGNOSTICS?: string;
-
-  @IsOptional()
   @IsString()
   TALLY_CONNECTOR_SECRET?: string;
 

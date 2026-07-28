@@ -12,7 +12,6 @@ describe('AuthService', () => {
     get: jest.fn((key: string) => {
       if (key === 'jwt.secret') return 'test-jwt-secret';
       if (key === 'jwt.expiresIn') return '15d';
-      if (key === 'app.authDiagnostics') return false;
       return undefined;
     }),
   };
@@ -43,7 +42,6 @@ describe('AuthService', () => {
     configService.get.mockImplementation((key: string) => {
       if (key === 'jwt.secret') return 'test-jwt-secret';
       if (key === 'jwt.expiresIn') return '15d';
-      if (key === 'app.authDiagnostics') return false;
       return undefined;
     });
   });

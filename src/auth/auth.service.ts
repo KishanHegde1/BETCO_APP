@@ -1,9 +1,4 @@
-import {
-  HttpStatus,
-  Injectable,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { sign, SignOptions } from 'jsonwebtoken';
@@ -17,8 +12,6 @@ import { LoginResult } from './interfaces/login-result.interface';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
@@ -33,12 +26,6 @@ export class AuthService {
     const isPasswordValid = user
       ? await bcrypt.compare(normalizedPassword, user.passwordHash)
       : false;
-
-    if (this.configService.get<boolean>('app.authDiagnostics')) {
-      this.logger.log(
-        `AUTH_LOGIN_DIAGNOSTIC normalizedUsername=${normalizedUsername} userFound=${user !== null} userId=${user?.id ?? 'none'} role=${user?.role ?? 'none'} isActive=${user?.isActive ?? 'none'} passwordHashLoaded=${Boolean(user?.passwordHash)} passwordHashLength=${user?.passwordHash.length ?? 0} bcryptCompareSucceeded=${isPasswordValid}`,
-      );
-    }
 
     if (!isPasswordValid || !user) {
       throw new UnauthorizedException('Invalid username or password.');

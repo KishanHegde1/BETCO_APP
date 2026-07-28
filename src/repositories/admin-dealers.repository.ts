@@ -29,7 +29,10 @@ export interface AdminDealerListRow {
   phone: string | null;
   contactNumber: string | null;
   address: string | null;
+  email: string | null;
+  role: string;
   isActive: boolean;
+  mustChangePassword: boolean;
   createdAt: Date;
   updatedAt: Date;
   orderSummary: DealerListOrderSummary;
@@ -44,6 +47,7 @@ export interface DealerListOrderSummary {
   rejectedOrders: number;
   completedOrders: number;
   thisMonthOrders: number;
+  previousMonthOrders: number;
 }
 
 export interface AdminDealersPage {
@@ -65,7 +69,10 @@ export interface AdminDealerProfileRow {
   phone: string | null;
   contactNumber: string | null;
   address: string | null;
+  email: string | null;
+  role: string;
   isActive: boolean;
+  mustChangePassword: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -105,8 +112,9 @@ export class AdminDealersRepository {
   async findPage(
     options: AdminDealersQueryDto,
     currentMonth: BusinessDateRange,
+    previousMonth: BusinessDateRange,
   ): Promise<AdminDealersPage> {
-    const query = this.dealerListQuery(currentMonth);
+    const query = this.dealerListQuery(currentMonth, previousMonth);
     this.applyDealerFilters(query, options);
 
     const countQuery = this.dealerBaseQuery();
@@ -140,7 +148,10 @@ export class AdminDealersRepository {
         'dealer.phone AS "phone"',
         'COALESCE(dealer.phone, "user".phone) AS "contactNumber"',
         'dealer.address AS "address"',
+        '"user".email AS "email"',
+        '"user".role AS "role"',
         '"user".is_active AS "isActive"',
+        '"user".must_change_password AS "mustChangePassword"',
         'dealer.created_at AS "createdAt"',
         'dealer.updated_at AS "updatedAt"',
       ])
@@ -290,6 +301,7 @@ export class AdminDealersRepository {
 
   private dealerListQuery(
     currentMonth: BusinessDateRange,
+    previousMonth: BusinessDateRange,
   ): SelectQueryBuilder<Dealer> {
     return this.dealerBaseQuery()
       .leftJoin(
@@ -303,7 +315,8 @@ export class AdminDealersRepository {
             COUNT("order".id) FILTER (WHERE "order".status = '${OrderStatus.CANCELLED}') AS cancelled_orders,
             COUNT("order".id) FILTER (WHERE "order".status = '${OrderStatus.REJECTED}') AS rejected_orders,
             COUNT("order".id) FILTER (WHERE "order".status = '${OrderStatus.COMPLETED}') AS completed_orders,
-            COUNT("order".id) FILTER (WHERE "order".created_at >= :currentStart AND "order".created_at < :currentEnd) AS this_month_orders
+            COUNT("order".id) FILTER (WHERE "order".created_at >= :currentStart AND "order".created_at < :currentEnd) AS this_month_orders,
+            COUNT("order".id) FILTER (WHERE "order".created_at >= :previousStart AND "order".created_at < :previousEnd) AS previous_month_orders
           FROM orders "order"
           GROUP BY "order".dealer_id
         )`,
@@ -318,7 +331,10 @@ export class AdminDealersRepository {
         'dealer.phone AS "phone"',
         'COALESCE(dealer.phone, "user".phone) AS "contactNumber"',
         'dealer.address AS "address"',
+        '"user".email AS "email"',
+        '"user".role AS "role"',
         '"user".is_active AS "isActive"',
+        '"user".must_change_password AS "mustChangePassword"',
         'dealer.created_at AS "createdAt"',
         'dealer.updated_at AS "updatedAt"',
         'COALESCE(order_summary.total_orders, 0) AS "totalOrders"',
@@ -329,10 +345,13 @@ export class AdminDealersRepository {
         'COALESCE(order_summary.rejected_orders, 0) AS "rejectedOrders"',
         'COALESCE(order_summary.completed_orders, 0) AS "completedOrders"',
         'COALESCE(order_summary.this_month_orders, 0) AS "thisMonthOrders"',
+        'COALESCE(order_summary.previous_month_orders, 0) AS "previousMonthOrders"',
       ])
       .setParameters({
         currentStart: currentMonth.from,
         currentEnd: currentMonth.toExclusive,
+        previousStart: previousMonth.from,
+        previousEnd: previousMonth.toExclusive,
       });
   }
 
@@ -435,6 +454,7 @@ export class AdminDealersRepository {
         rejectedOrders: values.rejectedOrders,
         completedOrders: values.completedOrders,
         thisMonthOrders: values.thisMonthOrders,
+        previousMonthOrders: values.previousMonthOrders,
       },
     };
   }
@@ -443,6 +463,7 @@ export class AdminDealersRepository {
     return {
       ...row,
       isActive: String(row.isActive) === 'true',
+      mustChangePassword: String(row.mustChangePassword) === 'true',
     };
   }
 
