@@ -12,3 +12,6 @@ export * from './product.entity';
 export * from './solar-project-media.entity';
 export * from './solar-project.entity';
 export * from './user.entity';
+export * from './tally-dealer-mapping.entity';
+export * from './tally-sync-checkpoint.entity';
+export * from './tally-sync-run.entity';

@@ -50,6 +50,14 @@ async function bootstrap(): Promise<void> {
       .setDescription('Backend API architecture for Betco Aqua Traders')
       .setVersion('1.0')
       .addBearerAuth()
+      .addApiKey(
+        {
+          type: 'apiKey',
+          name: 'x-betco-sync-key',
+          in: 'header',
+        },
+        'tally-connector',
+      )
       .build();
     const document = SwaggerModule.createDocument(app, swaggerConfig);
     SwaggerModule.setup('api/docs', app, document);

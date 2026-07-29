@@ -20,6 +20,14 @@ export class Dealer extends BaseEntity {
   @Column({ name: 'contact_number', nullable: true, length: 32 })
   contactNumber?: string;
 
+  @Index()
+  @Column({ nullable: true, length: 32 })
+  gstin?: string;
+
+  @Index({ unique: true })
+  @Column({ name: 'dealer_code', nullable: true, length: 80 })
+  dealerCode?: string;
+
   @Column({ type: 'text', nullable: true })
   address!: string | null;
 }

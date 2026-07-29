@@ -63,6 +63,10 @@ class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  TALLY_MAPPING_PRIORITY?: string;
+
+  @IsOptional()
+  @IsString()
   CLOUDINARY_CLOUD_NAME?: string;
 
   @IsOptional()

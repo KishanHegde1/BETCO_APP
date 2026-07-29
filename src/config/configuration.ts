@@ -19,6 +19,7 @@ export interface ApplicationConfiguration {
   tally: {
     connectorId?: string;
     connectorSecret?: string;
+    mappingPriority: string;
   };
   cloudinary: {
     cloudName?: string;
@@ -61,6 +62,8 @@ export default (): ApplicationConfiguration => {
     tally: {
       connectorId: process.env.TALLY_CONNECTOR_ID,
       connectorSecret: process.env.TALLY_CONNECTOR_SECRET,
+      mappingPriority:
+        process.env.TALLY_MAPPING_PRIORITY ?? 'GSTIN,DEALER_CODE,PHONE,NAME',
     },
     cloudinary: {
       cloudName: process.env.CLOUDINARY_CLOUD_NAME,
