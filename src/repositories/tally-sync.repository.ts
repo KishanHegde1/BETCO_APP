@@ -8,6 +8,7 @@ import {
   DealerInvoiceItem,
   DealerPayment,
   TallyDealerMapping,
+  TallyLedger,
   TallySyncCheckpoint,
   TallySyncRun,
 } from '../entities';
@@ -24,6 +25,8 @@ export class TallySyncRepository {
     readonly payments: Repository<DealerPayment>,
     @InjectRepository(TallyDealerMapping)
     readonly mappings: Repository<TallyDealerMapping>,
+    @InjectRepository(TallyLedger)
+    readonly ledgers: Repository<TallyLedger>,
     @InjectRepository(TallySyncCheckpoint)
     readonly checkpoints: Repository<TallySyncCheckpoint>,
     @InjectRepository(TallySyncRun)

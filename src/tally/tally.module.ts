@@ -8,6 +8,7 @@ import {
   DealerInvoiceItem,
   DealerPayment,
   TallyDealerMapping,
+  TallyLedger,
   TallySyncCheckpoint,
   TallySyncRun,
 } from '../entities';
@@ -15,6 +16,7 @@ import { TallySyncRepository } from '../repositories/tally-sync.repository';
 import { TallyController } from './controllers/tally.controller';
 import { TallyConnectorAuthGuard } from './guards/tally-connector-auth.guard';
 import { TallyConnectorService } from './services/tally-connector.service';
+import { TallyReadService } from './services/tally-read.service';
 
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { TallyConnectorService } from './services/tally-connector.service';
       DealerInvoiceItem,
       DealerPayment,
       TallyDealerMapping,
+      TallyLedger,
       TallySyncCheckpoint,
       TallySyncRun,
     ]),
@@ -31,6 +34,7 @@ import { TallyConnectorService } from './services/tally-connector.service';
   controllers: [TallyController],
   providers: [
     TallyConnectorService,
+    TallyReadService,
     TallyConnectorAuthGuard,
     TallySyncRepository,
   ],

@@ -39,6 +39,27 @@ export class TallySyncRun extends BaseEntity {
   @Column({ name: 'unmatched_count', type: 'integer', default: 0 })
   unmatchedCount!: number;
 
+  @Column({ name: 'mapped_count', type: 'integer', default: 0 })
+  mappedCount!: number;
+
+  @Column({ name: 'ledger_inserted_count', type: 'integer', default: 0 })
+  ledgerInsertedCount!: number;
+
+  @Column({ name: 'ledger_updated_count', type: 'integer', default: 0 })
+  ledgerUpdatedCount!: number;
+
+  @Column({ name: 'invoice_inserted_count', type: 'integer', default: 0 })
+  invoiceInsertedCount!: number;
+
+  @Column({ name: 'invoice_updated_count', type: 'integer', default: 0 })
+  invoiceUpdatedCount!: number;
+
+  @Column({ name: 'payment_inserted_count', type: 'integer', default: 0 })
+  paymentInsertedCount!: number;
+
+  @Column({ name: 'payment_updated_count', type: 'integer', default: 0 })
+  paymentUpdatedCount!: number;
+
   @Column({ name: 'error_message', type: 'text', nullable: true })
   errorMessage?: string;
 }

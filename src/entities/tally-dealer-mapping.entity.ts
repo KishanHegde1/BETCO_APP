@@ -36,4 +36,7 @@ export class TallyDealerMapping extends BaseEntity {
 
   @Column({ name: 'last_synced_at', type: 'timestamptz', nullable: true })
   lastSyncedAt?: Date;
+
+  @Column({ name: 'is_active', default: true })
+  isActive!: boolean;
 }

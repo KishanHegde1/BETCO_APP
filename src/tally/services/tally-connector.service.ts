@@ -1,19 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHash } from 'crypto';
 import { EntityManager } from 'typeorm';
 
 import { formatBusinessDate } from '../../common/utils/business-date.util';
 import {
-  Dealer,
   DealerInvoice,
   DealerInvoiceItem,
   DealerPayment,
   TallyDealerMapping,
-  TallyMappingMethod,
+  TallyLedger,
+  TallyLedgerMappingStatus,
   TallySyncCheckpoint,
   TallySyncRun,
   TallySyncRunStatus,
-  User,
 } from '../../entities';
 import { TallySyncRepository } from '../../repositories/tally-sync.repository';
 import {
@@ -23,8 +23,6 @@ import {
   TallySyncRequestDto,
 } from '../dto/tally-sync-request.dto';
 
-type MappingPriority = Exclude<TallyMappingMethod, 'MANUAL'>;
-
 export interface TallySyncResult {
   syncRunId: string;
   checkpointToken?: string;
@@ -32,6 +30,13 @@ export interface TallySyncResult {
   invoicesProcessed: number;
   paymentsProcessed: number;
   unmatchedRecords: number;
+  mappedRecords: number;
+  ledgersInserted: number;
+  ledgersUpdated: number;
+  invoicesInserted: number;
+  invoicesUpdated: number;
+  paymentsInserted: number;
+  paymentsUpdated: number;
 }
 
 export interface DealerLedgerSummary {
@@ -45,6 +50,8 @@ export interface DealerLedgerSummary {
 
 @Injectable()
 export class TallyConnectorService {
+  private readonly logger = new Logger(TallyConnectorService.name);
+
   constructor(
     private readonly repository: TallySyncRepository,
     private readonly configService: ConfigService,
@@ -64,7 +71,7 @@ export class TallyConnectorService {
       const result = await this.repository.transaction(async (manager) => {
         const companyName = payload.company.name.trim();
         const mappings = await manager.getRepository(TallyDealerMapping).find({
-          where: { tallyCompanyName: companyName },
+          where: { tallyCompanyName: companyName, isActive: true },
         });
         const mappingsByLedgerKey = new Map<string, TallyDealerMapping>();
         for (const mapping of mappings) {
@@ -78,7 +85,15 @@ export class TallyConnectorService {
         }
 
         let unmatchedRecords = 0;
+        let mappedRecords = 0;
+        let ledgersInserted = 0;
+        let ledgersUpdated = 0;
+        let invoicesInserted = 0;
+        let invoicesUpdated = 0;
+        let paymentsInserted = 0;
+        let paymentsUpdated = 0;
         const mappingForLedger = new Map<string, TallyDealerMapping>();
+        const persistedLedgers = new Map<string, TallyLedger>();
         for (const ledger of payload.ledgers) {
           const mapping = await this.resolveLedgerMapping(
             manager,
@@ -90,7 +105,19 @@ export class TallyConnectorService {
             mappingForLedger.set(ledger.sourceKey, mapping);
             if (ledger.guid) mappingForLedger.set(ledger.guid, mapping);
             mappingForLedger.set(this.normalizedKey(ledger.name), mapping);
+            mappedRecords += 1;
           }
+          const persisted = await this.upsertLedger(
+            manager,
+            companyName,
+            ledger,
+            mapping,
+          );
+          if (persisted.inserted) ledgersInserted += 1;
+          else ledgersUpdated += 1;
+          persistedLedgers.set(ledger.sourceKey, persisted.ledger);
+          if (ledger.guid) persistedLedgers.set(ledger.guid, persisted.ledger);
+          persistedLedgers.set(this.normalizedKey(ledger.name), persisted.ledger);
         }
 
         for (const invoice of payload.invoices) {
@@ -101,11 +128,22 @@ export class TallyConnectorService {
             mappingForLedger,
             mappingsByLedgerKey,
           );
-          if (!mapping) {
-            unmatchedRecords += 1;
-            continue;
-          }
-          await this.upsertInvoice(manager, companyName, mapping, invoice);
+          const ledger =
+            (invoice.partyLedgerGuid
+              ? persistedLedgers.get(invoice.partyLedgerGuid)
+              : undefined) ??
+            persistedLedgers.get(this.normalizedKey(invoice.partyLedgerName));
+          if (!mapping) unmatchedRecords += 1;
+          else mappedRecords += 1;
+          const inserted = await this.upsertInvoice(
+            manager,
+            companyName,
+            mapping,
+            ledger,
+            invoice,
+          );
+          if (inserted) invoicesInserted += 1;
+          else invoicesUpdated += 1;
         }
 
         for (const payment of payload.payments) {
@@ -116,11 +154,22 @@ export class TallyConnectorService {
             mappingForLedger,
             mappingsByLedgerKey,
           );
-          if (!mapping) {
-            unmatchedRecords += 1;
-            continue;
-          }
-          await this.upsertPayment(manager, companyName, mapping, payment);
+          const ledger =
+            (payment.partyLedgerGuid
+              ? persistedLedgers.get(payment.partyLedgerGuid)
+              : undefined) ??
+            persistedLedgers.get(this.normalizedKey(payment.partyLedgerName));
+          if (!mapping) unmatchedRecords += 1;
+          else mappedRecords += 1;
+          const inserted = await this.upsertPayment(
+            manager,
+            companyName,
+            mapping,
+            ledger,
+            payment,
+          );
+          if (inserted) paymentsInserted += 1;
+          else paymentsUpdated += 1;
         }
 
         const checkpoints = manager.getRepository(TallySyncCheckpoint);
@@ -142,6 +191,13 @@ export class TallyConnectorService {
         return {
           checkpointToken: checkpoint.checkpointToken,
           unmatchedRecords,
+          mappedRecords,
+          ledgersInserted,
+          ledgersUpdated,
+          invoicesInserted,
+          invoicesUpdated,
+          paymentsInserted,
+          paymentsUpdated,
         };
       });
 
@@ -151,7 +207,17 @@ export class TallyConnectorService {
       run.invoiceCount = payload.invoices.length;
       run.paymentCount = payload.payments.length;
       run.unmatchedCount = result.unmatchedRecords;
+      run.mappedCount = result.mappedRecords;
+      run.ledgerInsertedCount = result.ledgersInserted;
+      run.ledgerUpdatedCount = result.ledgersUpdated;
+      run.invoiceInsertedCount = result.invoicesInserted;
+      run.invoiceUpdatedCount = result.invoicesUpdated;
+      run.paymentInsertedCount = result.paymentsInserted;
+      run.paymentUpdatedCount = result.paymentsUpdated;
       await this.repository.syncRuns.save(run);
+      this.logger.log(
+        `Read-only Tally sync ${run.id} completed: ${payload.ledgers.length} ledgers, ${payload.invoices.length} invoices, ${payload.payments.length} payments.`,
+      );
       return {
         syncRunId: run.id,
         checkpointToken: result.checkpointToken,
@@ -159,12 +225,22 @@ export class TallyConnectorService {
         invoicesProcessed: payload.invoices.length,
         paymentsProcessed: payload.payments.length,
         unmatchedRecords: result.unmatchedRecords,
+        mappedRecords: result.mappedRecords,
+        ledgersInserted: result.ledgersInserted,
+        ledgersUpdated: result.ledgersUpdated,
+        invoicesInserted: result.invoicesInserted,
+        invoicesUpdated: result.invoicesUpdated,
+        paymentsInserted: result.paymentsInserted,
+        paymentsUpdated: result.paymentsUpdated,
       };
     } catch (error) {
       run.status = TallySyncRunStatus.FAILED;
       run.finishedAt = new Date();
       run.errorMessage = this.safeErrorMessage(error);
       await this.repository.syncRuns.save(run);
+      this.logger.error(
+        `Read-only Tally sync ${run.id} failed: ${run.errorMessage}`,
+      );
       throw error;
     }
   }
@@ -251,23 +327,11 @@ export class TallyConnectorService {
       return saved;
     }
 
-    const match = await this.findDealerMatch(manager, ledger);
-    if (!match) return undefined;
-    const mappings = manager.getRepository(TallyDealerMapping);
-    const mapping = await mappings.save(
-      mappings.create({
-        dealerId: match.dealerId,
-        tallyCompanyName: companyName,
-        tallyLedgerGuid: ledger.guid?.trim() || undefined,
-        tallyLedgerName: ledger.name.trim(),
-        mappingMethod: match.method,
-        lastClosingBalance: this.money(ledger.closingBalance),
-        lastSyncedAt: new Date(),
-      }),
-    );
-    cache.set(this.normalizedKey(ledger.name), mapping);
-    if (ledger.guid) cache.set(ledger.guid, mapping);
-    return mapping;
+    // A dealer association is authoritative only when an administrator has
+    // created an active tally_dealer_mappings record.  New or renamed Tally
+    // ledgers deliberately remain unmapped so that sync never assigns a
+    // customer based on a fuzzy name, phone, GSTIN or dealer-code match.
+    return undefined;
   }
 
   private async resolveVoucherMapping(
@@ -301,70 +365,32 @@ export class TallyConnectorService {
     );
   }
 
-  private async findDealerMatch(
-    manager: EntityManager,
-    ledger: Pick<TallyLedgerSyncDto, 'gstin' | 'dealerCode' | 'phone' | 'name'>,
-  ): Promise<{ dealerId: string; method: MappingPriority } | undefined> {
-    for (const method of this.mappingPriority()) {
-      const value = this.valueForMethod(ledger, method);
-      if (!value) continue;
-      const query = manager
-        .getRepository(Dealer)
-        .createQueryBuilder('dealer')
-        .innerJoin(User, 'appUser', 'appUser.id = dealer.user_id')
-        .select('dealer.id', 'dealerId');
-      switch (method) {
-        case 'GSTIN':
-          query.where('UPPER(TRIM(dealer.gstin)) = UPPER(TRIM(:value))', {
-            value,
-          });
-          break;
-        case 'DEALER_CODE':
-          query.where('LOWER(TRIM(dealer.dealer_code)) = LOWER(TRIM(:value))', {
-            value,
-          });
-          break;
-        case 'PHONE':
-          query.where(
-            '(dealer.phone = :value OR dealer.contact_number = :value OR appUser.phone = :value)',
-            { value },
-          );
-          break;
-        case 'NAME':
-          query.where(
-            "(LOWER(TRIM(dealer.business_name)) = LOWER(TRIM(:value)) OR LOWER(TRIM(COALESCE(dealer.shop_name, ''))) = LOWER(TRIM(:value)) OR LOWER(TRIM(appUser.username)) = LOWER(TRIM(:value)))",
-            { value },
-          );
-          break;
-      }
-      const candidates = await query.getRawMany<{ dealerId: string }>();
-      if (candidates.length === 1) {
-        return { dealerId: candidates[0].dealerId, method };
-      }
-    }
-    return undefined;
-  }
-
   private async upsertInvoice(
     manager: EntityManager,
     companyName: string,
-    mapping: TallyDealerMapping,
+    mapping: TallyDealerMapping | undefined,
+    ledger: TallyLedger | undefined,
     input: TallyInvoiceSyncDto,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const invoices = manager.getRepository(DealerInvoice);
+    const sourceKey = this.sourceKey(input, 'invoice');
     let invoice = await invoices.findOneBy({
       tallyCompanyName: companyName,
-      tallyVoucherGuid: input.guid,
+      sourceKey,
     });
+    const inserted = !invoice;
     if (!invoice) {
       invoice = invoices.create({
         tallyCompanyName: companyName,
-        tallyVoucherGuid: input.guid,
-        dealerId: mapping.dealerId,
+        sourceKey,
+        tallyVoucherGuid: input.guid?.trim() || sourceKey,
+        dealerId: mapping?.dealerId ?? null,
+        tallyLedgerId: ledger?.id ?? null,
         invoiceNumber: input.voucherNumber.trim(),
         invoiceDate: input.voucherDate,
         voucherType: input.voucherType.trim(),
         partyLedgerName: input.partyLedgerName.trim(),
+        normalizedPartyLedgerName: this.normalizedKey(input.partyLedgerName),
         invoiceAmount: '0.00',
         pendingAmount: '0.00',
         discountAmount: '0.00',
@@ -372,33 +398,46 @@ export class TallyConnectorService {
         syncedAt: new Date(),
       });
     }
-    invoice.dealerId = mapping.dealerId;
+    invoice.dealerId = mapping?.dealerId ?? null;
+    invoice.tallyLedgerId = ledger?.id ?? null;
     invoice.invoiceNumber = input.voucherNumber.trim();
     invoice.invoiceDate = input.voucherDate;
     invoice.tallyMasterId = input.masterId?.trim() || undefined;
     invoice.tallyAlterId = input.alterId?.trim() || undefined;
     invoice.voucherType = input.voucherType.trim();
     invoice.partyLedgerName = input.partyLedgerName.trim();
+    invoice.normalizedPartyLedgerName = this.normalizedKey(
+      input.partyLedgerName,
+    );
     invoice.invoiceAmount = this.money(input.amount);
     invoice.pendingAmount = this.money(input.pendingAmount);
+    invoice.paidAmount = this.paidAmount(input.amount, input.pendingAmount);
+    invoice.paymentStatus = this.paymentStatus(input.amount, input.pendingAmount);
     invoice.discountAmount = this.money(input.discountAmount);
     invoice.taxAmount = this.money(input.taxAmount);
     invoice.isCancelled = input.isCancelled ?? false;
     invoice.syncedAt = new Date();
+    invoice.pdfUrl = this.safePdfUrl(input.invoicePdfMetadata);
+    invoice.pdfStatus = invoice.pdfUrl ? 'AVAILABLE' : 'NOT_AVAILABLE';
     invoice.sourceMetadata = {
-      sourceKey: input.sourceKey,
+      sourceKey,
       ...(input.invoicePdfMetadata
         ? { invoicePdfMetadata: input.invoicePdfMetadata }
         : {}),
     };
+    invoice.rawPayload = input as unknown as Record<string, unknown>;
     invoice = await invoices.save(invoice);
 
     const items = manager.getRepository(DealerInvoiceItem);
-    await items.delete({ invoiceId: invoice.id });
     if (input.items.length > 0) {
+      const existingItems = await items.find({ where: { invoiceId: invoice.id } });
+      const byDisplayOrder = new Map(
+        existingItems.map((item) => [item.displayOrder, item]),
+      );
       await items.save(
-        input.items.map((item, index) =>
-          items.create({
+        input.items.map((item, index) => {
+          const row = byDisplayOrder.get(index) ?? items.create({ invoiceId: invoice.id });
+          Object.assign(row, {
             invoiceId: invoice.id,
             itemName: item.itemName.trim(),
             sku: item.sku?.trim() || undefined,
@@ -409,80 +448,97 @@ export class TallyConnectorService {
             taxAmount: this.money(item.taxAmount),
             unit: item.unit?.trim() || undefined,
             displayOrder: index,
-          }),
-        ),
+          });
+          return row;
+        }),
       );
     }
+    return inserted;
   }
 
   private async upsertPayment(
     manager: EntityManager,
     companyName: string,
-    mapping: TallyDealerMapping,
+    mapping: TallyDealerMapping | undefined,
+    ledger: TallyLedger | undefined,
     input: TallyPaymentSyncDto,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const payments = manager.getRepository(DealerPayment);
+    const sourceKey = this.sourceKey(input, 'payment');
     let payment = await payments.findOneBy({
       tallyCompanyName: companyName,
-      tallyVoucherGuid: input.guid,
+      sourceKey,
     });
+    const inserted = !payment;
     if (!payment) {
       payment = payments.create({
-        dealerId: mapping.dealerId,
+        sourceKey,
+        dealerId: mapping?.dealerId ?? null,
+        tallyLedgerId: ledger?.id ?? null,
         tallyCompanyName: companyName,
-        tallyVoucherGuid: input.guid,
+        tallyVoucherGuid: input.guid?.trim() || sourceKey,
         paymentDate: input.voucherDate,
         voucherType: input.voucherType.trim(),
         partyLedgerName: input.partyLedgerName.trim(),
+        normalizedPartyLedgerName: this.normalizedKey(input.partyLedgerName),
         amount: '0.00',
         syncedAt: new Date(),
       });
     }
-    payment.dealerId = mapping.dealerId;
+    payment.dealerId = mapping?.dealerId ?? null;
+    payment.tallyLedgerId = ledger?.id ?? null;
     payment.paymentDate = input.voucherDate;
     payment.tallyMasterId = input.masterId?.trim() || undefined;
     payment.tallyAlterId = input.alterId?.trim() || undefined;
     payment.voucherNumber = input.voucherNumber.trim();
     payment.voucherType = input.voucherType.trim();
     payment.partyLedgerName = input.partyLedgerName.trim();
+    payment.normalizedPartyLedgerName = this.normalizedKey(
+      input.partyLedgerName,
+    );
     payment.referenceNumber = input.referenceNumber?.trim() || undefined;
     payment.amount = this.money(input.amount);
     payment.syncedAt = new Date();
-    payment.sourceMetadata = { sourceKey: input.sourceKey };
+    payment.sourceMetadata = { sourceKey };
+    payment.rawPayload = input as unknown as Record<string, unknown>;
     await payments.save(payment);
+    return inserted;
   }
 
-  private mappingPriority(): MappingPriority[] {
-    const configured = this.configService
-      .get<string>('tally.mappingPriority')
-      ?.split(',')
-      .map((value) => value.trim().toUpperCase())
-      .filter(
-        (value): value is MappingPriority =>
-          value === 'GSTIN' ||
-          value === 'DEALER_CODE' ||
-          value === 'PHONE' ||
-          value === 'NAME',
-      );
-    return configured?.length
-      ? configured
-      : ['GSTIN', 'DEALER_CODE', 'PHONE', 'NAME'];
-  }
-
-  private valueForMethod(
-    ledger: Pick<TallyLedgerSyncDto, 'gstin' | 'dealerCode' | 'phone' | 'name'>,
-    method: MappingPriority,
-  ): string | undefined {
-    switch (method) {
-      case 'GSTIN':
-        return ledger.gstin?.trim();
-      case 'DEALER_CODE':
-        return ledger.dealerCode?.trim();
-      case 'PHONE':
-        return ledger.phone?.trim();
-      case 'NAME':
-        return ledger.name.trim();
+  private async upsertLedger(
+    manager: EntityManager,
+    companyName: string,
+    input: TallyLedgerSyncDto,
+    mapping?: TallyDealerMapping,
+  ): Promise<{ ledger: TallyLedger; inserted: boolean }> {
+    const ledgers = manager.getRepository(TallyLedger);
+    const sourceKey = this.sourceKey(input, 'ledger');
+    let ledger = await ledgers.findOneBy({ tallyCompanyName: companyName, sourceKey });
+    const inserted = !ledger;
+    if (!ledger) {
+      ledger = ledgers.create({ tallyCompanyName: companyName, sourceKey });
     }
+    ledger.tallyLedgerGuid = input.guid?.trim() || null;
+    ledger.tallyLedgerName = input.name.trim();
+    ledger.normalizedLedgerName = this.normalizedKey(input.name);
+    ledger.parentGroup = input.parent?.trim() || null;
+    ledger.phone = input.phone?.trim() || null;
+    ledger.gstin = input.gstin?.trim() || null;
+    ledger.openingBalance = this.money(input.openingBalance);
+    ledger.closingBalance = this.money(input.closingBalance);
+    ledger.dealerId = mapping?.dealerId ?? null;
+    ledger.mappingStatus = mapping
+      ? TallyLedgerMappingStatus.MAPPED
+      : TallyLedgerMappingStatus.UNMAPPED;
+    ledger.isActive = true;
+    ledger.lastSyncedAt = new Date();
+    const saved = await ledgers.save(ledger);
+    if (mapping) {
+      mapping.lastClosingBalance = saved.closingBalance;
+      mapping.lastSyncedAt = saved.lastSyncedAt ?? new Date();
+      await manager.getRepository(TallyDealerMapping).save(mapping);
+    }
+    return { ledger: saved, inserted };
   }
 
   private money(value: number): string {
@@ -493,13 +549,58 @@ export class TallyConnectorService {
     return Math.abs(value).toFixed(3);
   }
 
+  private paidAmount(total: number, pending: number): string {
+    // pendingAmount is a required Tally-agent value. It permits a safe amount
+    // calculation, but we never try to allocate individual Receipt vouchers.
+    if (total > 0 && pending >= 0 && pending <= total) {
+      return this.money(total - pending);
+    }
+    return '0.00';
+  }
+
+  private paymentStatus(total: number, pending: number): string {
+    if (total <= 0 || pending < 0) return 'UNKNOWN';
+    if (pending === 0) return 'PAID';
+    if (pending >= total) return 'PENDING';
+    return 'PARTIALLY_PAID';
+  }
+
+  private safePdfUrl(value: string | undefined): string | null {
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      return ['https:', 'http:'].includes(url.protocol) ? url.toString() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private sourceKey(
+    input: { sourceKey?: string; guid?: string; voucherNumber?: string; voucherDate?: string; name?: string },
+    kind: string,
+  ): string {
+    const supplied = input.sourceKey?.trim();
+    if (supplied) return supplied;
+    const stable = [
+      kind,
+      input.guid?.trim() ?? '',
+      input.voucherNumber?.trim() ?? input.name?.trim() ?? '',
+      input.voucherDate ?? '',
+    ].join('|');
+    return `${kind}:${createHash('sha256').update(stable).digest('hex')}`;
+  }
+
   private toNumber(value: string | number | null | undefined): number {
     const parsed = Number(value ?? 0);
     return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
   }
 
   private normalizedKey(value: string): string {
-    return value.trim().toLocaleLowerCase('en-US');
+    return value
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('en-US');
   }
 
   private safeErrorMessage(error: unknown): string {

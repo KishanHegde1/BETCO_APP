@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { ExpressAdapter } from '@nestjs/platform-express';
 import compression from 'compression';
+import { json, urlencoded } from 'express';
 import helmet from 'helmet';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 
@@ -28,6 +29,10 @@ async function bootstrap(): Promise<void> {
   httpAdapter.set('trust proxy', 1);
   app.use(helmet());
   app.use(compression());
+  // The read-only connector can send large Tally export batches. Keep a
+  // bounded parser limit; no file upload middleware or disk storage is used.
+  app.use(json({ limit: '10mb' }));
+  app.use(urlencoded({ extended: true, limit: '10mb' }));
   app.enableCors({
     origin: corsOrigins,
     // The API uses bearer tokens rather than cookies. Never pair an
