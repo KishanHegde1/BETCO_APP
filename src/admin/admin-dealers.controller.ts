@@ -6,6 +6,8 @@ import {
   Get,
   Param,
   Patch,
+  Put,
+  Delete,
   ParseUUIDPipe,
   Post,
   Query,
@@ -35,6 +37,7 @@ import { CreateAdminDealerDto } from './dto/create-admin-dealer.dto';
 import { ResetAdminDealerPasswordDto } from './dto/reset-admin-dealer-password.dto';
 import { UpdateAdminDealerDto } from './dto/update-admin-dealer.dto';
 import { UpdateAdminDealerStatusDto } from './dto/update-admin-dealer-status.dto';
+import { UpdateDealerTallyMappingDto } from './dto/update-dealer-tally-mapping.dto';
 
 @ApiBearerAuth()
 @ApiTags('Admin Dealers')
@@ -56,6 +59,23 @@ export class AdminDealersController {
   @ApiCreatedResponse({ description: 'Dealer account created.' })
   create(@Body() dto: CreateAdminDealerDto) {
     return this.dealersService.create(dto);
+  }
+
+  @Put(':dealerId/tally-mapping')
+  @ApiOperation({ summary: 'Map a dealer to the exact Tally billing ledger name' })
+  updateTallyMapping(
+    @Param('dealerId', new ParseUUIDPipe()) dealerId: string,
+    @Body() dto: UpdateDealerTallyMappingDto,
+  ) {
+    return this.dealersService.updateTallyMapping(dealerId, dto);
+  }
+
+  @Delete(':dealerId/tally-mapping')
+  @ApiOperation({ summary: 'Safely deactivate a dealer Tally ledger mapping' })
+  removeTallyMapping(
+    @Param('dealerId', new ParseUUIDPipe()) dealerId: string,
+  ) {
+    return this.dealersService.removeTallyMapping(dealerId);
   }
 
   @Post('import/validate')

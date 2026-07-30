@@ -8,6 +8,9 @@ import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
+import { DealerInvoice } from '../entities/dealer-invoice.entity';
+import { TallyModule } from '../tally/tally.module';
+import { AdminTallyController } from './admin-tally.controller';
 import { AdminDealersRepository } from '../repositories/admin-dealers.repository';
 import { OrdersRepository } from '../repositories/orders.repository';
 import { AdminDealersController } from './admin-dealers.controller';
@@ -17,6 +20,7 @@ import { AdminDashboardService } from './admin-dashboard.service';
 
 @Module({
   imports: [
+    TallyModule,
     TypeOrmModule.forFeature([
       Category,
       Product,
@@ -25,9 +29,14 @@ import { AdminDashboardService } from './admin-dashboard.service';
       User,
       Order,
       OrderItem,
+      DealerInvoice,
     ]),
   ],
-  controllers: [AdminDashboardController, AdminDealersController],
+  controllers: [
+    AdminDashboardController,
+    AdminDealersController,
+    AdminTallyController,
+  ],
   providers: [
     AdminDashboardService,
     AdminDealersService,

@@ -2,17 +2,21 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Brackets, IsNull } from 'typeorm';
+import { Brackets, EntityManager, IsNull, Repository } from 'typeorm';
 
 import {
+  Dealer,
   DealerInvoice,
   DealerPayment,
   TallyDealerMapping,
+  TallyLedger,
   TallyLedgerMappingStatus,
   TallySyncRunStatus,
 } from '../../entities';
+import { formatBusinessDate } from '../../common/utils/business-date.util';
 import { TallySyncRepository } from '../../repositories/tally-sync.repository';
 import {
   CreateTallyMappingDto,
@@ -20,36 +24,50 @@ import {
   TallyLedgerQueryDto,
   TallyPageQueryDto,
   TallyPaymentQueryDto,
+  TallyTodayBillsQueryDto,
   UpdateTallyMappingDto,
 } from '../dto/tally-read-query.dto';
 
 @Injectable()
 export class TallyReadService {
+  private readonly logger = new Logger(TallyReadService.name);
+
   constructor(private readonly repository: TallySyncRepository) {}
 
   async dealerSummary(userId: string) {
     const dealer = await this.requireDealer(userId);
-    const ledger = await this.repository.ledgers.findOne({
-      where: { dealerId: dealer.id, mappingStatus: TallyLedgerMappingStatus.MAPPED },
+    // The mapping table is authoritative.  A ledger can be imported after a
+    // mapping is saved, so do not report an active mapping as disconnected
+    // merely because a ledger's cached dealer_id has not been refreshed yet.
+    const mapping = await this.repository.mappings.findOne({
+      where: { dealerId: dealer.id, isActive: true },
       order: { lastSyncedAt: 'DESC' },
     });
-    if (!ledger) {
-      return {
+    if (!mapping) {
+      const summary = {
         dealerId: dealer.id,
         mappingStatus: 'NOT_MAPPED',
+        isMapped: false,
         ledgerName: null,
+        tallyLedgerName: null,
         openingBalance: 0,
         closingBalance: 0,
         totalInvoiceAmount: 0,
         totalPaymentAmount: 0,
         outstandingAmount: 0,
+        outstandingBalance: 0,
         invoiceCount: 0,
         paymentCount: 0,
+        totalBills: 0,
+        totalPayments: 0,
         lastInvoice: null,
         lastPayment: null,
         lastSyncedAt: null,
       };
+      this.logDealerSummary(userId, dealer, null, null, summary);
+      return summary;
     }
+    const ledger = await this.ledgerForMapping(mapping);
     const [invoiceTotals, paymentTotals, lastInvoice, lastPayment] =
       await Promise.all([
         this.repository.invoices
@@ -74,21 +92,31 @@ export class TallyReadService {
           order: { paymentDate: 'DESC', createdAt: 'DESC' },
         }),
       ]);
-    return {
+    const closingBalance = this.number(
+      ledger?.closingBalance ?? mapping.lastClosingBalance,
+    );
+    const summary = {
       dealerId: dealer.id,
       mappingStatus: 'MAPPED',
-      ledgerName: ledger.tallyLedgerName,
-      openingBalance: this.number(ledger.openingBalance),
-      closingBalance: this.number(ledger.closingBalance),
+      isMapped: true,
+      ledgerName: mapping.tallyLedgerName,
+      tallyLedgerName: mapping.tallyLedgerName,
+      openingBalance: this.number(ledger?.openingBalance),
+      closingBalance,
       totalInvoiceAmount: this.number(invoiceTotals?.total),
       totalPaymentAmount: this.number(paymentTotals?.total),
-      outstandingAmount: this.number(ledger.closingBalance),
+      outstandingAmount: closingBalance,
+      outstandingBalance: closingBalance,
       invoiceCount: Number(invoiceTotals?.count ?? 0),
       paymentCount: Number(paymentTotals?.count ?? 0),
+      totalBills: Number(invoiceTotals?.count ?? 0),
+      totalPayments: Number(paymentTotals?.count ?? 0),
       lastInvoice: lastInvoice ? this.invoiceListItem(lastInvoice) : null,
       lastPayment: lastPayment ? this.paymentListItem(lastPayment) : null,
-      lastSyncedAt: ledger.lastSyncedAt ?? null,
+      lastSyncedAt: ledger?.lastSyncedAt ?? mapping.lastSyncedAt ?? null,
     };
+    this.logDealerSummary(userId, dealer, mapping, ledger, summary);
+    return summary;
   }
 
   async dealerInvoices(userId: string, query: TallyInvoiceQueryDto) {
@@ -192,15 +220,44 @@ export class TallyReadService {
   }
 
   async adminLedgers(query: TallyLedgerQueryDto) {
-    const builder = this.repository.ledgers.createQueryBuilder('ledger');
-    if (query.mapped === 'mapped') builder.andWhere('ledger.mapping_status = :status', { status: TallyLedgerMappingStatus.MAPPED });
-    if (query.mapped === 'unmapped') builder.andWhere('ledger.mapping_status = :status', { status: TallyLedgerMappingStatus.UNMAPPED });
+    const builder = this.repository.ledgers
+      .createQueryBuilder('ledger')
+      .leftJoin(Dealer, 'dealer', 'dealer.id = ledger.dealer_id');
+    const mappingStatus = (query.mappingStatus ?? query.mapped).toLowerCase();
+    if (mappingStatus === 'mapped') builder.andWhere('ledger.mapping_status = :status', { status: TallyLedgerMappingStatus.MAPPED });
+    if (mappingStatus === 'unmapped') builder.andWhere('ledger.mapping_status = :status', { status: TallyLedgerMappingStatus.UNMAPPED });
     if (query.active !== undefined) builder.andWhere('ledger.is_active = :active', { active: query.active });
     const search = query.search?.trim();
     if (search) builder.andWhere(new Brackets((nested) => nested.where('ledger.tally_ledger_name ILIKE :search', { search: `%${search}%` }).orWhere('ledger.gstin ILIKE :search', { search: `%${search}%` }).orWhere('ledger.phone ILIKE :search', { search: `%${search}%` })));
     const total = await builder.clone().getCount();
-    const items = await builder.orderBy('ledger.updated_at', query.sortOrder).skip((query.page - 1) * query.limit).take(query.limit).getMany();
-    return { items, pagination: this.pagination(query, total) };
+    const rows = await builder
+      .select([
+        'ledger.id AS "id"',
+        'ledger.tally_company_name AS "tallyCompanyName"',
+        'ledger.tally_ledger_name AS "tallyLedgerName"',
+        'ledger.closing_balance AS "closingBalance"',
+        'ledger.last_synced_at AS "lastSyncedAt"',
+        'ledger.mapping_status AS "mappingStatus"',
+        'ledger.dealer_id AS "mappedDealerId"',
+        'dealer.business_name AS "mappedDealerName"',
+      ])
+      .orderBy('ledger.updated_at', query.sortOrder)
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getRawMany<Record<string, unknown>>();
+    const items = rows.map((row) => ({
+      ...row,
+      closingBalance: this.number(row.closingBalance as string | number),
+      mappedDealerId: row.mappedDealerId ?? null,
+      mappedDealerName: row.mappedDealerName ?? null,
+    }));
+    return {
+      items,
+      page: query.page,
+      limit: query.limit,
+      total,
+      pagination: this.pagination(query, total),
+    };
   }
 
   async adminLedger(id: string) {
@@ -211,6 +268,94 @@ export class TallyReadService {
 
   adminInvoices(query: TallyInvoiceQueryDto) { return this.invoicePage(query, query.dealerId); }
   adminPayments(query: TallyPaymentQueryDto) { return this.paymentPage(query, query.dealerId); }
+
+  async adminTodayBills(query: TallyTodayBillsQueryDto) {
+    const date = query.date ?? formatBusinessDate(new Date());
+    const builder = this.repository.invoices
+      .createQueryBuilder('invoice')
+      .leftJoin(Dealer, 'dealer', 'dealer.id = invoice.dealer_id')
+      .where('invoice.invoice_date = :date', { date });
+    const mappingStatus = query.mappingStatus?.toLowerCase() ?? 'all';
+    if (mappingStatus === 'mapped') builder.andWhere('invoice.dealer_id IS NOT NULL');
+    if (mappingStatus === 'unmapped') builder.andWhere('invoice.dealer_id IS NULL');
+    const search = query.search?.trim();
+    if (search) builder.andWhere(new Brackets((nested) => nested
+      .where('invoice.invoice_number ILIKE :search', { search: `%${search}%` })
+      .orWhere('invoice.party_ledger_name ILIKE :search', { search: `%${search}%` })
+      .orWhere('dealer.business_name ILIKE :search', { search: `%${search}%` })));
+    const totals = await builder.clone()
+      .select('COUNT(invoice.id)', 'totalBills')
+      .addSelect('COALESCE(SUM(invoice.invoice_amount), 0)', 'totalAmount')
+      .addSelect('COUNT(invoice.id) FILTER (WHERE invoice.dealer_id IS NOT NULL)', 'mappedBills')
+      .addSelect('COUNT(invoice.id) FILTER (WHERE invoice.dealer_id IS NULL)', 'unmappedBills')
+      .getRawOne<Record<string, string | number>>();
+    const total = Number(totals?.totalBills ?? 0);
+    const rows = await builder
+      .select([
+        'invoice.id AS "id"',
+        'invoice.tally_company_name AS "tallyCompanyName"',
+        'invoice.invoice_number AS "invoiceNumber"',
+        'invoice.invoice_date AS "invoiceDate"',
+        'invoice.party_ledger_name AS "partyLedgerName"',
+        'invoice.invoice_amount AS "invoiceAmount"',
+        'invoice.dealer_id AS "dealerId"',
+        'dealer.business_name AS "dealerName"',
+        'invoice.synced_at AS "lastSyncedAt"',
+      ])
+      .orderBy('invoice.invoice_date', query.sortOrder)
+      .addOrderBy('invoice.created_at', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit)
+      .getRawMany<Record<string, unknown>>();
+    return {
+      date,
+      totalBills: total,
+      totalAmount: this.number(totals?.totalAmount),
+      mappedBills: Number(totals?.mappedBills ?? 0),
+      unmappedBills: Number(totals?.unmappedBills ?? 0),
+      items: rows.map((row) => ({
+        ...row,
+        voucherDate: row.invoiceDate,
+        invoiceAmount: this.number(row.invoiceAmount as string | number),
+        dealerId: row.dealerId ?? null,
+        dealerName: row.dealerName ?? null,
+        mappingStatus: row.dealerId ? 'MAPPED' : 'UNMAPPED',
+      })),
+      page: query.page,
+      limit: query.limit,
+      total,
+      pagination: this.pagination(query, total),
+    };
+  }
+
+  async adminInvoice(invoiceId: string) {
+    const invoice = await this.repository.invoices.findOneBy({ id: invoiceId });
+    if (!invoice) throw new NotFoundException('Tally bill not found.');
+    const [dealer, items] = await Promise.all([
+      invoice.dealerId
+        ? this.repository.dealers.findOneBy({ id: invoice.dealerId })
+        : Promise.resolve(null),
+      this.repository.invoiceItems.find({
+        where: { invoiceId: invoice.id },
+        order: { displayOrder: 'ASC' },
+      }),
+    ]);
+    return {
+      ...this.invoiceDetail(invoice),
+      invoiceDate: invoice.invoiceDate,
+      dealer: dealer
+        ? { id: dealer.id, businessName: dealer.businessName }
+        : null,
+      items: items.map((item) => ({
+        id: item.id,
+        description: item.itemName,
+        quantity: this.number(item.quantity),
+        rate: this.number(item.rate),
+        amount: this.number(item.amount),
+        taxAmount: this.number(item.taxAmount),
+      })),
+    };
+  }
 
   async unmatchedRecords(query: TallyPageQueryDto) {
     const skip = (query.page - 1) * query.limit;
@@ -236,60 +381,138 @@ export class TallyReadService {
   }
 
   async createMapping(dto: CreateTallyMappingDto) {
-    const [dealer, ledger] = await Promise.all([
-      this.repository.dealers.findOneBy({ id: dto.dealerId }),
-      this.repository.ledgers.findOneBy({ id: dto.ledgerId }),
-    ]);
-    if (!dealer) throw new NotFoundException('Dealer not found.');
+    const ledger = await this.repository.ledgers.findOneBy({ id: dto.ledgerId });
     if (!ledger) throw new NotFoundException('Tally ledger not found.');
-    let mapping = await this.mappingForLedger(ledger);
-    if (mapping?.isActive && mapping.dealerId !== dealer.id) {
-      throw new ConflictException('This active Tally ledger is already mapped to another dealer.');
+    if (!dto.isActive) {
+      throw new BadRequestException('Create a mapping as active, then unmap it when needed.');
     }
-    if (!mapping) {
-      mapping = await this.repository.mappings.findOne({
-        where: { dealerId: dealer.id, tallyCompanyName: ledger.tallyCompanyName },
-      });
-      if (mapping?.isActive && mapping.tallyLedgerName !== ledger.tallyLedgerName) {
-        throw new ConflictException('This dealer already has an active Tally ledger mapping for this company.');
-      }
-    }
-    if (!mapping) mapping = this.repository.mappings.create({ dealerId: dealer.id, tallyCompanyName: ledger.tallyCompanyName, tallyLedgerName: ledger.tallyLedgerName, mappingMethod: 'MANUAL' });
-    mapping.tallyLedgerName = ledger.tallyLedgerName;
-    mapping.tallyLedgerGuid = ledger.tallyLedgerGuid ?? undefined;
-    mapping.lastClosingBalance = ledger.closingBalance;
-    mapping.lastSyncedAt = ledger.lastSyncedAt ?? new Date();
-    mapping.isActive = dto.isActive;
-    mapping = await this.repository.mappings.save(mapping);
-    await this.applyMappingToLedger(ledger, mapping);
-    return mapping;
+    return this.mapDealerToBillingLedger(dto.dealerId, {
+      tallyCompanyName: ledger.tallyCompanyName,
+      tallyLedgerName: ledger.tallyLedgerName,
+    });
   }
 
   async updateMapping(id: string, dto: UpdateTallyMappingDto) {
     const mapping = await this.repository.mappings.findOneBy({ id });
     if (!mapping) throw new NotFoundException('Tally mapping not found.');
-    if (dto.dealerId) {
-      const dealer = await this.repository.dealers.findOneBy({ id: dto.dealerId });
-      if (!dealer) throw new NotFoundException('Dealer not found.');
-      if (mapping.isActive) {
-        const conflict = await this.repository.mappings.findOne({
-          where: {
-            dealerId: dealer.id,
-            tallyCompanyName: mapping.tallyCompanyName,
-            isActive: true,
-          },
-        });
-        if (conflict && conflict.id !== mapping.id) {
-          throw new ConflictException('This dealer already has an active Tally ledger mapping for this company.');
-        }
-      }
-      mapping.dealerId = dealer.id;
+    if (dto.isActive === false) return this.unmapDealer(mapping.dealerId);
+    return this.mapDealerToBillingLedger(dto.dealerId ?? mapping.dealerId, {
+      tallyCompanyName: mapping.tallyCompanyName,
+      tallyLedgerName: mapping.tallyLedgerName,
+    });
+  }
+
+  /** Returns the authoritative active mapping and its current imported ledger. */
+  async dealerMapping(dealerId: string) {
+    const mapping = await this.repository.mappings.findOne({
+      where: { dealerId, isActive: true },
+      order: { lastSyncedAt: 'DESC' },
+    });
+    if (!mapping) return { isMapped: false };
+    const ledger = await this.ledgerForMapping(mapping);
+    return {
+      isMapped: true,
+      tallyCompanyName: mapping.tallyCompanyName,
+      tallyLedgerName: mapping.tallyLedgerName,
+      closingBalance: this.number(
+        ledger?.closingBalance ?? mapping.lastClosingBalance,
+      ),
+      lastSyncedAt: ledger?.lastSyncedAt ?? mapping.lastSyncedAt ?? null,
+      mappingStatus: ledger?.mappingStatus ?? TallyLedgerMappingStatus.MAPPED,
+    };
+  }
+
+  /**
+   * Connects an app dealer to an exact Tally billing name.  The transaction
+   * keeps the mapping, ledger cache, and already-imported bills consistent.
+   */
+  async mapDealerToBillingLedger(
+    dealerId: string,
+    input: { tallyCompanyName: string; tallyLedgerName: string },
+  ) {
+    const companyName = input.tallyCompanyName.trim();
+    const ledgerName = input.tallyLedgerName.trim();
+    if (!companyName || !ledgerName) {
+      throw new BadRequestException('Tally company and billing ledger name are required.');
     }
-    if (dto.isActive !== undefined) mapping.isActive = dto.isActive;
-    const saved = await this.repository.mappings.save(mapping);
-    const ledger = await this.ledgerForMapping(saved);
-    if (ledger) await this.applyMappingToLedger(ledger, saved);
-    return saved;
+    return this.repository.transaction(async (manager) => {
+      const dealer = await manager.getRepository(Dealer).findOneBy({ id: dealerId });
+      if (!dealer) throw new NotFoundException('Dealer not found.');
+      const ledger = await this.findLedgerByBillingName(
+        manager,
+        companyName,
+        ledgerName,
+      );
+      if (!ledger) throw new NotFoundException('Tally billing ledger not found. Synchronize Tally first.');
+
+      const mappings = manager.getRepository(TallyDealerMapping);
+      const mappingForLedger = await this.mappingForLedgerWithRepository(
+        mappings,
+        ledger,
+      );
+      if (mappingForLedger?.isActive && mappingForLedger.dealerId !== dealerId) {
+        throw new ConflictException('This Tally billing ledger is already mapped to another dealer.');
+      }
+      let mapping = await mappings.findOne({
+        where: { dealerId, tallyCompanyName: ledger.tallyCompanyName },
+      });
+      if (!mapping) mapping = mappingForLedger;
+      if (!mapping) {
+        mapping = mappings.create({
+          dealerId,
+          tallyCompanyName: ledger.tallyCompanyName,
+          tallyLedgerName: ledger.tallyLedgerName,
+          mappingMethod: 'MANUAL',
+        });
+      }
+
+      const previousLedger = await this.findLedgerForMapping(manager, mapping);
+      if (previousLedger && previousLedger.id !== ledger.id) {
+        previousLedger.dealerId = null;
+        previousLedger.mappingStatus = TallyLedgerMappingStatus.UNMAPPED;
+        await manager.getRepository(TallyLedger).save(previousLedger);
+      }
+      mapping.dealerId = dealerId;
+      mapping.tallyCompanyName = ledger.tallyCompanyName;
+      mapping.tallyLedgerName = ledger.tallyLedgerName;
+      mapping.tallyLedgerGuid = ledger.tallyLedgerGuid ?? undefined;
+      mapping.mappingMethod = 'MANUAL';
+      mapping.lastClosingBalance = ledger.closingBalance;
+      mapping.lastSyncedAt = ledger.lastSyncedAt ?? new Date();
+      mapping.isActive = true;
+      mapping = await mappings.save(mapping);
+      await this.applyMappingToLedger(manager, ledger, mapping);
+      return {
+        dealerId,
+        tallyCompanyName: mapping.tallyCompanyName,
+        tallyLedgerName: mapping.tallyLedgerName,
+        closingBalance: this.number(ledger.closingBalance),
+        lastSyncedAt: ledger.lastSyncedAt ?? null,
+        mappingStatus: TallyLedgerMappingStatus.MAPPED,
+        isMapped: true,
+      };
+    });
+  }
+
+  async unmapDealer(dealerId: string) {
+    return this.repository.transaction(async (manager) => {
+      const mappings = manager.getRepository(TallyDealerMapping);
+      const mapping = await mappings.findOne({
+        where: { dealerId, isActive: true },
+      });
+      if (!mapping) return { dealerId, isMapped: false };
+      const ledger = await this.findLedgerForMapping(manager, mapping);
+      mapping.isActive = false;
+      await mappings.save(mapping);
+      if (ledger) {
+        ledger.dealerId = null;
+        ledger.mappingStatus = TallyLedgerMappingStatus.UNMAPPED;
+        await manager.getRepository(TallyLedger).save(ledger);
+      }
+      // Existing invoices and payments are intentionally retained.  They are
+      // historical accounting records and must not be deleted on unmapping.
+      return { dealerId, isMapped: false };
+    });
   }
 
   private async invoicePage(query: TallyInvoiceQueryDto, dealerId?: string) {
@@ -323,7 +546,23 @@ export class TallyReadService {
   }
 
   private invoiceListItem(item: DealerInvoice) {
-    return { id: item.id, voucherNumber: item.invoiceNumber, voucherDate: item.invoiceDate, voucherType: item.voucherType, partyLedgerName: item.partyLedgerName, totalAmount: this.number(item.invoiceAmount), pendingAmount: this.number(item.pendingAmount), paidAmount: this.number(item.paidAmount), paymentStatus: item.paymentStatus, pdfAvailable: item.pdfStatus === 'AVAILABLE' && Boolean(item.pdfUrl) };
+    const invoiceAmount = this.number(item.invoiceAmount);
+    return {
+      id: item.id,
+      tallyCompanyName: item.tallyCompanyName,
+      invoiceNumber: item.invoiceNumber,
+      invoiceDate: item.invoiceDate,
+      invoiceAmount,
+      voucherNumber: item.invoiceNumber,
+      voucherDate: item.invoiceDate,
+      voucherType: item.voucherType,
+      partyLedgerName: item.partyLedgerName,
+      totalAmount: invoiceAmount,
+      pendingAmount: this.number(item.pendingAmount),
+      paidAmount: this.number(item.paidAmount),
+      paymentStatus: item.paymentStatus,
+      pdfAvailable: item.pdfStatus === 'AVAILABLE' && Boolean(item.pdfUrl),
+    };
   }
 
   private invoiceDetail(item: DealerInvoice) {
@@ -344,13 +583,16 @@ export class TallyReadService {
     return dealer;
   }
 
-  private async mappingForLedger(ledger: {
+  private async mappingForLedgerWithRepository(
+    mappings: Repository<TallyDealerMapping>,
+    ledger: {
     tallyCompanyName: string;
     tallyLedgerGuid?: string | null;
     tallyLedgerName: string;
-  }): Promise<TallyDealerMapping | null> {
+    },
+  ): Promise<TallyDealerMapping | null> {
     if (ledger.tallyLedgerGuid) {
-      const byGuid = await this.repository.mappings.findOne({
+      const byGuid = await mappings.findOne({
         where: {
           tallyCompanyName: ledger.tallyCompanyName,
           tallyLedgerGuid: ledger.tallyLedgerGuid,
@@ -358,17 +600,26 @@ export class TallyReadService {
       });
       if (byGuid) return byGuid;
     }
-    return this.repository.mappings.findOne({
-      where: {
-        tallyCompanyName: ledger.tallyCompanyName,
-        tallyLedgerName: ledger.tallyLedgerName,
-      },
+    const candidates = await mappings.find({
+      where: { tallyCompanyName: ledger.tallyCompanyName },
     });
+    return candidates.find(
+      (candidate) =>
+        this.normalizedKey(candidate.tallyLedgerName) ===
+        this.normalizedKey(ledger.tallyLedgerName),
+    ) ?? null;
   }
 
   private async ledgerForMapping(mapping: TallyDealerMapping) {
+    return this.findLedgerForMapping(this.repository.dealers.manager, mapping);
+  }
+
+  private async findLedgerForMapping(
+    manager: EntityManager,
+    mapping: TallyDealerMapping,
+  ) {
     if (mapping.tallyLedgerGuid) {
-      const byGuid = await this.repository.ledgers.findOne({
+      const byGuid = await manager.getRepository(TallyLedger).findOne({
         where: {
           tallyCompanyName: mapping.tallyCompanyName,
           tallyLedgerGuid: mapping.tallyLedgerGuid,
@@ -376,15 +627,29 @@ export class TallyReadService {
       });
       if (byGuid) return byGuid;
     }
-    return this.repository.ledgers.findOne({
-      where: {
-        tallyCompanyName: mapping.tallyCompanyName,
-        tallyLedgerName: mapping.tallyLedgerName,
-      },
+    return this.findLedgerByBillingName(
+      manager,
+      mapping.tallyCompanyName,
+      mapping.tallyLedgerName,
+    );
+  }
+
+  private async findLedgerByBillingName(
+    manager: EntityManager,
+    companyName: string,
+    billingName: string,
+  ) {
+    const ledgers = await manager.getRepository(TallyLedger).find({
+      where: { tallyCompanyName: companyName.trim() },
     });
+    const normalized = this.normalizedKey(billingName);
+    return ledgers.find(
+      (ledger) => this.normalizedKey(ledger.tallyLedgerName) === normalized,
+    ) ?? null;
   }
 
   private async applyMappingToLedger(
+    manager: EntityManager,
     ledger: { id: string; tallyCompanyName: string; normalizedLedgerName: string; dealerId?: string | null; mappingStatus: TallyLedgerMappingStatus },
     mapping: TallyDealerMapping,
   ): Promise<void> {
@@ -393,16 +658,16 @@ export class TallyReadService {
     ledger.mappingStatus = mapping.isActive
       ? TallyLedgerMappingStatus.MAPPED
       : TallyLedgerMappingStatus.UNMAPPED;
-    await this.repository.ledgers.save(ledger);
+    await manager.getRepository(TallyLedger).save(ledger);
     await Promise.all([
-      this.repository.invoices
+      manager.getRepository(DealerInvoice)
         .createQueryBuilder()
         .update(DealerInvoice)
         .set({ dealerId: mappedDealerId, tallyLedgerId: mappedDealerId ? ledger.id : null })
         .where('tally_company_name = :companyName', { companyName: ledger.tallyCompanyName })
         .andWhere('normalized_party_ledger_name = :ledgerName', { ledgerName: ledger.normalizedLedgerName })
         .execute(),
-      this.repository.payments
+      manager.getRepository(DealerPayment)
         .createQueryBuilder()
         .update(DealerPayment)
         .set({ dealerId: mappedDealerId, tallyLedgerId: mappedDealerId ? ledger.id : null })
@@ -423,5 +688,39 @@ export class TallyReadService {
   private number(value: string | number | null | undefined): number {
     const parsed = Number(value ?? 0);
     return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+  }
+
+  private normalizedKey(value: string): string {
+    return value
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('en-US');
+  }
+
+  private logDealerSummary(
+    userId: string,
+    dealer: Dealer,
+    mapping: TallyDealerMapping | null,
+    ledger: TallyLedger | null,
+    summary: Record<string, unknown>,
+  ): void {
+    if (process.env.TALLY_DIAGNOSTICS !== 'true') return;
+    this.logger.log({
+      event: 'tally_dealer_summary',
+      userId,
+      dealerId: dealer.id,
+      dealerName: dealer.businessName,
+      mappingFound: Boolean(mapping),
+      mappingLedgerName: mapping?.tallyLedgerName ?? null,
+      ledgerFound: Boolean(ledger),
+      ledgerDealerId: ledger?.dealerId ?? null,
+      ledgerMappingStatus: ledger?.mappingStatus ?? null,
+      closingBalance: summary.closingBalance,
+      lastSyncedAt: summary.lastSyncedAt,
+      invoiceCount: summary.invoiceCount,
+      paymentCount: summary.paymentCount,
+      returnedMappingStatus: summary.mappingStatus,
+    });
   }
 }

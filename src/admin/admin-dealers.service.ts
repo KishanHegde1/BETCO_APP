@@ -31,6 +31,8 @@ import {
 } from '../common/utils/business-date.util';
 import { AdminDealersRepository } from '../repositories/admin-dealers.repository';
 import { OrdersRepository } from '../repositories/orders.repository';
+import { TallyReadService } from '../tally/services/tally-read.service';
+import { UpdateDealerTallyMappingDto } from './dto/update-dealer-tally-mapping.dto';
 
 export interface UploadedDealerSpreadsheet {
   originalname: string;
@@ -96,14 +98,24 @@ export class AdminDealersService {
     private readonly dealersRepository: AdminDealersRepository,
     private readonly ordersRepository: OrdersRepository,
     private readonly dataSource: DataSource,
+    private readonly tallyReadService?: TallyReadService,
   ) {}
 
-  findAll(query: AdminDealersQueryDto) {
-    return this.dealersRepository.findPage(
+  async findAll(query: AdminDealersQueryDto) {
+    const page = await this.dealersRepository.findPage(
       query,
       currentMonthBusinessRange(),
       previousMonthBusinessRange(),
     );
+    return {
+      ...page,
+      items: await Promise.all(
+        page.items.map(async (dealer) => ({
+          ...dealer,
+          tallyMapping: await this.mappingForDealer(dealer.id),
+        })),
+      ),
+    };
   }
 
   async create(dto: CreateAdminDealerDto) {
@@ -229,7 +241,33 @@ export class AdminDealersService {
     if (!details) {
       throw new NotFoundException('Dealer not found.');
     }
-    return details;
+    return {
+      ...details,
+      dealerId: details.id,
+      username: details.name,
+      tallyMapping: await this.mappingForDealer(dealerId),
+    };
+  }
+
+  async updateTallyMapping(
+    dealerId: string,
+    dto: UpdateDealerTallyMappingDto,
+  ) {
+    await this.requireDealer(dealerId);
+    if (!this.tallyReadService) {
+      throw new BadRequestException('Tally mapping service is unavailable.');
+    }
+    await this.tallyReadService.mapDealerToBillingLedger(dealerId, dto);
+    return this.findOne(dealerId);
+  }
+
+  async removeTallyMapping(dealerId: string) {
+    await this.requireDealer(dealerId);
+    if (!this.tallyReadService) {
+      throw new BadRequestException('Tally mapping service is unavailable.');
+    }
+    await this.tallyReadService.unmapDealer(dealerId);
+    return this.findOne(dealerId);
   }
 
   async findOrders(dealerId: string, query: AdminDealerOrdersQueryDto) {
@@ -279,6 +317,12 @@ export class AdminDealersService {
       throw new NotFoundException('Dealer not found.');
     }
     return dealer;
+  }
+
+  private async mappingForDealer(dealerId: string) {
+    return this.tallyReadService?.dealerMapping(dealerId) ?? {
+      isMapped: false,
+    };
   }
 
   private async createDealerAccount(

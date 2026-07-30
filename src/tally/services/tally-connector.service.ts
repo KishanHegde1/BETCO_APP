@@ -37,6 +37,18 @@ export interface TallySyncResult {
   invoicesUpdated: number;
   paymentsInserted: number;
   paymentsUpdated: number;
+  received: TallySyncRecordCounts;
+  inserted: TallySyncRecordCounts;
+  updated: TallySyncRecordCounts;
+  unchanged: TallySyncRecordCounts;
+  skipped: number;
+}
+
+export interface TallySyncRecordCounts {
+  ledgers: number;
+  invoices: number;
+  payments: number;
+  total: number;
 }
 
 export interface DealerLedgerSummary {
@@ -58,6 +70,9 @@ export class TallyConnectorService {
   ) {}
 
   async sync(payload: TallySyncRequestDto): Promise<TallySyncResult> {
+    this.logger.log(
+      `Tally sync received: ${payload.ledgers.length} ledgers, ${payload.invoices.length} invoices, ${payload.payments.length} payments.`,
+    );
     const run = await this.repository.syncRuns.save(
       this.repository.syncRuns.create({
         connectorId: payload.connectorId,
@@ -218,7 +233,25 @@ export class TallyConnectorService {
       this.logger.log(
         `Read-only Tally sync ${run.id} completed: ${payload.ledgers.length} ledgers, ${payload.invoices.length} invoices, ${payload.payments.length} payments.`,
       );
-      return {
+      const received = this.recordCounts(
+        payload.ledgers.length,
+        payload.invoices.length,
+        payload.payments.length,
+      );
+      const inserted = this.recordCounts(
+        result.ledgersInserted,
+        result.invoicesInserted,
+        result.paymentsInserted,
+      );
+      const updated = this.recordCounts(
+        result.ledgersUpdated,
+        result.invoicesUpdated,
+        result.paymentsUpdated,
+      );
+      // The agent sends only its changed checkpoint records. A received
+      // record therefore resolves to inserted or updated in this service.
+      const unchanged = this.recordCounts(0, 0, 0);
+      const response = {
         syncRunId: run.id,
         checkpointToken: result.checkpointToken,
         ledgersProcessed: payload.ledgers.length,
@@ -232,7 +265,16 @@ export class TallyConnectorService {
         invoicesUpdated: result.invoicesUpdated,
         paymentsInserted: result.paymentsInserted,
         paymentsUpdated: result.paymentsUpdated,
+        received,
+        inserted,
+        updated,
+        unchanged,
+        skipped: unchanged.total,
       };
+      this.logger.log(
+        `Tally sync ${run.id} result: received ${received.total}; inserted ${inserted.total}; updated ${updated.total}; unchanged ${unchanged.total}; unmatched ${result.unmatchedRecords}.`,
+      );
+      return response;
     } catch (error) {
       run.status = TallySyncRunStatus.FAILED;
       run.finishedAt = new Date();
@@ -607,5 +649,18 @@ export class TallyConnectorService {
     const message =
       error instanceof Error ? error.message : 'Unknown sync error';
     return message.slice(0, 2000);
+  }
+
+  private recordCounts(
+    ledgers: number,
+    invoices: number,
+    payments: number,
+  ): TallySyncRecordCounts {
+    return {
+      ledgers,
+      invoices,
+      payments,
+      total: ledgers + invoices + payments,
+    };
   }
 }

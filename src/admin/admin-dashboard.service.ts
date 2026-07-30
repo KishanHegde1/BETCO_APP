@@ -7,6 +7,7 @@ import { DailyStock } from '../entities/daily-stock.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
+import { DealerInvoice } from '../entities/dealer-invoice.entity';
 
 export interface AdminDashboardSummary {
   activeCategoryCount: number;
@@ -18,6 +19,12 @@ export interface AdminDashboardSummary {
   totalBookedQuantityToday: number;
   dealerOrdersToday: number;
   pendingOrderCount: number;
+  todayTallyBills: {
+    count: number;
+    totalAmount: number;
+    mappedCount: number;
+    unmappedCount: number;
+  };
 }
 
 @Injectable()
@@ -28,11 +35,13 @@ export class AdminDashboardService {
     @InjectRepository(Product)
     private readonly products: Repository<Product>,
     @InjectRepository(Order) private readonly orders: Repository<Order>,
+    @InjectRepository(DealerInvoice)
+    private readonly invoices: Repository<DealerInvoice>,
   ) {}
 
   async getSummary(): Promise<AdminDashboardSummary> {
     const today = this.getIndianCalendarDate();
-    const [categories, products, stock, orders, booked] = await Promise.all([
+    const [categories, products, stock, orders, booked, todayTallyBills] = await Promise.all([
       this.categories
         .createQueryBuilder('category')
         .select('COUNT(*)', 'count')
@@ -122,6 +131,25 @@ export class AdminDashboardService {
           ],
         })
         .getRawOne<{ quantity: string }>(),
+      this.invoices
+        .createQueryBuilder('invoice')
+        .select('COUNT(invoice.id)', 'count')
+        .addSelect('COALESCE(SUM(invoice.invoice_amount), 0)', 'totalAmount')
+        .addSelect(
+          'COUNT(invoice.id) FILTER (WHERE invoice.dealer_id IS NOT NULL)',
+          'mappedCount',
+        )
+        .addSelect(
+          'COUNT(invoice.id) FILTER (WHERE invoice.dealer_id IS NULL)',
+          'unmappedCount',
+        )
+        .where('invoice.invoice_date = :today', { today })
+        .getRawOne<{
+          count: string;
+          totalAmount: string;
+          mappedCount: string;
+          unmappedCount: string;
+        }>(),
     ]);
 
     return {
@@ -134,6 +162,12 @@ export class AdminDashboardService {
       totalBookedQuantityToday: Number(booked?.quantity ?? 0),
       dealerOrdersToday: Number(orders?.todayCount ?? 0),
       pendingOrderCount: Number(orders?.pendingCount ?? 0),
+      todayTallyBills: {
+        count: Number(todayTallyBills?.count ?? 0),
+        totalAmount: Number(todayTallyBills?.totalAmount ?? 0),
+        mappedCount: Number(todayTallyBills?.mappedCount ?? 0),
+        unmappedCount: Number(todayTallyBills?.unmappedCount ?? 0),
+      },
     };
   }
 

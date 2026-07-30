@@ -41,6 +41,12 @@ describe('AdminDashboardService', () => {
     });
     const orderQuery = queryReturning({ todayCount: '4', pendingCount: '1' });
     const bookedQuery = queryReturning({ quantity: '30' });
+    const tallyBillsQuery = queryReturning({
+      count: '3',
+      totalAmount: '125000',
+      mappedCount: '2',
+      unmappedCount: '1',
+    });
     const categories = {
       createQueryBuilder: jest.fn().mockReturnValue(categoryQuery),
     };
@@ -56,10 +62,14 @@ describe('AdminDashboardService', () => {
         .mockReturnValueOnce(orderQuery)
         .mockReturnValueOnce(bookedQuery),
     };
+    const invoices = {
+      createQueryBuilder: jest.fn().mockReturnValue(tallyBillsQuery),
+    };
     const service = new AdminDashboardService(
       categories as never,
       products as never,
       orders as never,
+      invoices as never,
     );
 
     await expect(service.getSummary()).resolves.toEqual({
@@ -72,6 +82,12 @@ describe('AdminDashboardService', () => {
       totalBookedQuantityToday: 30,
       dealerOrdersToday: 4,
       pendingOrderCount: 1,
+      todayTallyBills: {
+        count: 3,
+        totalAmount: 125000,
+        mappedCount: 2,
+        unmappedCount: 1,
+      },
     });
 
     expect(liveStockQuery.leftJoin).toHaveBeenCalledTimes(1);

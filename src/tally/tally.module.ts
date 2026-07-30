@@ -38,6 +38,6 @@ import { TallyReadService } from './services/tally-read.service';
     TallyConnectorAuthGuard,
     TallySyncRepository,
   ],
-  exports: [TallyConnectorService],
+  exports: [TallyConnectorService, TallyReadService],
 })
 export class TallyModule {}

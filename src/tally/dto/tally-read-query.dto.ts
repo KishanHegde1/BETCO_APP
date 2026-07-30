@@ -79,6 +79,22 @@ export class TallyLedgerQueryDto extends TallyPageQueryDto {
   @Type(() => Boolean)
   @IsBoolean()
   active?: boolean;
+
+  // Kept alongside `mapped` so the public admin endpoint accepts the
+  // clearer `mappingStatus` query name without breaking the existing route.
+  @IsOptional()
+  @IsIn(['mapped', 'unmapped', 'all', 'MAPPED', 'UNMAPPED'])
+  mappingStatus?: string;
+}
+
+export class TallyTodayBillsQueryDto extends TallyPageQueryDto {
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+
+  @IsOptional()
+  @IsIn(['mapped', 'unmapped', 'all', 'MAPPED', 'UNMAPPED'])
+  mappingStatus?: string;
 }
 
 export class CreateTallyMappingDto {
