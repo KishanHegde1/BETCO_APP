@@ -18,7 +18,12 @@ export class TallyLedger extends BaseEntity {
   sourceKey!: string;
 
   @Index()
-  @Column({ name: 'tally_ledger_guid', nullable: true, length: 255 })
+  @Column({
+    name: 'tally_ledger_guid',
+    type: 'varchar',
+    nullable: true,
+    length: 255,
+  })
   tallyLedgerGuid?: string | null;
 
   @Column({ name: 'tally_ledger_name', length: 255 })
@@ -28,18 +33,23 @@ export class TallyLedger extends BaseEntity {
   @Column({ name: 'normalized_ledger_name', length: 255 })
   normalizedLedgerName!: string;
 
-  @Column({ name: 'parent_group', nullable: true, length: 255 })
+  @Column({
+    name: 'parent_group',
+    type: 'varchar',
+    nullable: true,
+    length: 255,
+  })
   parentGroup?: string | null;
 
   @Index()
-  @Column({ nullable: true, length: 32 })
+  @Column({ type: 'varchar', nullable: true, length: 32 })
   phone?: string | null;
 
-  @Column({ nullable: true, length: 255 })
+  @Column({ type: 'varchar', nullable: true, length: 255 })
   email?: string | null;
 
   @Index()
-  @Column({ nullable: true, length: 32 })
+  @Column({ type: 'varchar', nullable: true, length: 32 })
   gstin?: string | null;
 
   @Column({ type: 'text', nullable: true })

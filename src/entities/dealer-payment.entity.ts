@@ -47,7 +47,12 @@ export class DealerPayment extends BaseEntity {
   @Column({ name: 'normalized_party_ledger_name', length: 255 })
   normalizedPartyLedgerName!: string;
 
-  @Column({ name: 'payment_mode', nullable: true, length: 80 })
+  @Column({
+    name: 'payment_mode',
+    type: 'varchar',
+    nullable: true,
+    length: 80,
+  })
   paymentMode?: string | null;
 
   @Column({ type: 'text', nullable: true })
