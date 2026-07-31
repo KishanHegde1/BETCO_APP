@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiQuery,
@@ -8,8 +8,10 @@ import {
 } from '@nestjs/swagger';
 
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { UserRole } from '../common/constants/user-role.enum';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { TodayStockItem } from '../repositories/daily-stock.repository';
-import { StockService } from './stock.service';
+import { DealerStockAvailabilityItem, StockService } from './stock.service';
 
 @ApiBearerAuth()
 @ApiTags('Daily Stock')
@@ -31,7 +33,7 @@ export class StockController {
   })
   @ApiOkResponse({
     description:
-      'Every active product and its available quantity as of the requested date.',
+      'Every active product and its availability as of the requested date. Exact quantities are visible only to staff and admins.',
     schema: {
       example: {
         success: true,
@@ -44,7 +46,6 @@ export class StockController {
             categoryId: 'uuid',
             categoryName: 'Battery Inverters',
             sourceStockDate: '2026-07-26',
-            quantity: 25,
             isCarriedForward: true,
             isAvailable: true,
             stockUpdatedAt: '2026-07-26T11:30:00.000Z',
@@ -53,7 +54,13 @@ export class StockController {
       },
     },
   })
-  getTodayStock(@Query('date') date?: string): Promise<TodayStockItem[]> {
+  getTodayStock(
+    @Query('date') date?: string,
+    @Req() request?: { user?: JwtPayload },
+  ): Promise<TodayStockItem[] | DealerStockAvailabilityItem[]> {
+    if (request?.user?.role === UserRole.USER) {
+      return this.stockService.getDealerStockAvailability(date);
+    }
     return this.stockService.getTodayStock(date);
   }
 }

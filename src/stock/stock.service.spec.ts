@@ -43,6 +43,35 @@ describe('StockService', () => {
     );
   });
 
+  it('returns availability without exact quantities for a dealer', async () => {
+    repository.findCatalogueStockForDate.mockResolvedValue([
+      {
+        productId: 'product-1',
+        productName: 'Battery',
+        sku: 'BAT-1',
+        unit: 'PIECE',
+        categoryId: 'category-1',
+        categoryName: 'Battery',
+        quantity: 48,
+        stockDate: '2026-07-31',
+        sourceStockDate: '2026-07-31',
+        isCarriedForward: false,
+        isAvailable: true,
+        stockUpdatedAt: new Date('2026-07-31T10:00:00.000Z'),
+      },
+    ]);
+
+    const items = await service.getDealerStockAvailability('2026-07-31');
+    expect(items).toEqual([
+      expect.objectContaining({
+        productId: 'product-1',
+        isAvailable: true,
+      }),
+    ]);
+    const [item] = items;
+    expect(item).not.toHaveProperty('quantity');
+  });
+
   it('rejects a non-ISO stock-as-of date', () => {
     expect(() => service.getTodayStock('27-07-2026')).toThrow(
       BadRequestException,

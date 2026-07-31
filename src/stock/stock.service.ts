@@ -33,6 +33,9 @@ export interface StaffStockAddResponse {
   movementId: string;
 }
 
+/** Dealer-safe stock view. Exact inventory is restricted to staff and admins. */
+export type DealerStockAvailabilityItem = Omit<TodayStockItem, 'quantity'>;
+
 @Injectable()
 export class StockService {
   constructor(readonly dailyStockRepository: DailyStockRepository) {}
@@ -41,6 +44,13 @@ export class StockService {
     const requestedDate = date ?? this.getIndianCalendarDate();
     this.assertIsoDate(requestedDate);
     return this.dailyStockRepository.findCatalogueStockForDate(requestedDate);
+  }
+
+  async getDealerStockAvailability(
+    date?: string,
+  ): Promise<DealerStockAvailabilityItem[]> {
+    const items = await this.getTodayStock(date);
+    return items.map(({ quantity: _quantity, ...item }) => item);
   }
 
   async getAdminStockForDate(
