@@ -12,6 +12,14 @@ export enum OrderStatus {
   COMPLETED = 'COMPLETED',
 }
 
+/** Delivery progresses independently from the booking and billing workflow. */
+export enum DeliveryStatus {
+  NOT_READY = 'NOT_READY',
+  READY_FOR_DISPATCH = 'READY_FOR_DISPATCH',
+  SHIPPED = 'SHIPPED',
+  RECEIVED = 'RECEIVED',
+}
+
 @Entity({ name: 'orders' })
 export class Order extends BaseEntity {
   @Index()
@@ -43,4 +51,27 @@ export class Order extends BaseEntity {
   @Index()
   @Column({ name: 'bill_generated_by', type: 'uuid', nullable: true })
   billGeneratedBy?: string;
+
+  @Index()
+  @Column({
+    name: 'delivery_status',
+    type: 'varchar',
+    length: 30,
+    default: DeliveryStatus.NOT_READY,
+  })
+  deliveryStatus!: DeliveryStatus;
+
+  @Column({ name: 'shipped_at', type: 'timestamptz', nullable: true })
+  shippedAt?: Date | null;
+
+  @Index()
+  @Column({ name: 'shipped_by', type: 'uuid', nullable: true })
+  shippedBy?: string | null;
+
+  @Column({ name: 'received_at', type: 'timestamptz', nullable: true })
+  receivedAt?: Date | null;
+
+  @Index()
+  @Column({ name: 'received_by', type: 'uuid', nullable: true })
+  receivedBy?: string | null;
 }

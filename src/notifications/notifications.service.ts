@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { NotFoundException, Injectable } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 
 import {
@@ -9,6 +9,7 @@ import { NotificationsRepository } from '../repositories/notifications.repositor
 
 export interface CreateNotificationInput {
   userId: string;
+  orderId?: string | null;
   type: NotificationType;
   title: string;
   body: string;
@@ -30,5 +31,14 @@ export class NotificationsService {
       manager?.getRepository(Notification) ??
       this.notificationsRepository.repository;
     return repository.save(repository.create({ ...input, isRead: false }));
+  }
+
+  async markMineRead(userId: string, id: string): Promise<Notification> {
+    const notification = await this.notificationsRepository.repository.findOne({
+      where: { id, userId },
+    });
+    if (!notification) throw new NotFoundException('Notification not found.');
+    notification.isRead = true;
+    return this.notificationsRepository.repository.save(notification);
   }
 }

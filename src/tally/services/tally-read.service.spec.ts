@@ -213,6 +213,40 @@ describe('TallyReadService dealer isolation', () => {
     ]);
   });
 
+  it('returns the stored Tally grand total through the dealer invoice API', async () => {
+    const page = invoicePageQuery([
+      {
+        id: 'invoice-grand-total',
+        tallyCompanyName: 'BETCO AQUA TRADERS',
+        invoiceNumber: 'GST-101',
+        invoiceDate: '2026-07-30',
+        voucherType: 'GST Sales',
+        partyLedgerName: 'Bharathi Electrical',
+        invoiceAmount: '11880.56',
+        pendingAmount: '11880.56',
+        paidAmount: '0.00',
+        paymentStatus: 'PENDING',
+        pdfStatus: 'NOT_AVAILABLE',
+      },
+    ]);
+    repository.invoices.createQueryBuilder.mockReturnValue(page);
+
+    const result = await service.dealerInvoices('user-a', {
+      page: 1,
+      limit: 20,
+      sortBy: 'voucherDate',
+      sortOrder: 'DESC',
+    } as never);
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        invoiceNumber: 'GST-101',
+        invoiceAmount: 11880.56,
+        totalAmount: 11880.56,
+      }),
+    ]);
+  });
+
   it('uses the Asia/Kolkata business date when reading today’s bills', async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-07-29T19:00:00.000Z'));
     const query = todayBillsQuery();

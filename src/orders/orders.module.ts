@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { Dealer, Order, OrderItem } from '../entities';
+import { Dealer, Order, OrderActivity, OrderItem } from '../entities';
 import { DealersRepository } from '../repositories/dealers.repository';
 import { OrdersRepository } from '../repositories/orders.repository';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -13,7 +13,7 @@ import { StaffBillingController } from './staff-billing.controller';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderItem, Dealer]),
+    TypeOrmModule.forFeature([Order, OrderItem, OrderActivity, Dealer]),
     UsersModule,
     NotificationsModule,
   ],

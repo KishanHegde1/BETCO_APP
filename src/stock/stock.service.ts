@@ -1,9 +1,13 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { EntityManager } from 'typeorm';
+import { EntityManager, LessThanOrEqual } from 'typeorm';
 
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Category } from '../entities/category.entity';
 import { Product } from '../entities/product.entity';
+import {
+  StockMovement,
+  StockMovementType,
+} from '../entities/stock-movement.entity';
 import {
   AdminDailyStockItem,
   DailyStockRepository,
@@ -17,6 +21,17 @@ import {
   SetDailyStockItemDto,
   isoDateValidation,
 } from './dto/admin-daily-stock.dto';
+import { AddStaffStockDto } from './dto/add-staff-stock.dto';
+
+export interface StaffStockAddResponse {
+  productId: string;
+  productName: string;
+  stockDate: string;
+  quantityAdded: number;
+  previousQuantity: number;
+  newQuantity: number;
+  movementId: string;
+}
 
 @Injectable()
 export class StockService {
@@ -113,6 +128,104 @@ export class StockService {
       }
     });
     return this.getAdminStockForDate(targetDate, {});
+  }
+
+  /**
+   * Adds stock only.  Both the current balance and an append-only audit row
+   * are committed together, while the balance row is pessimistically locked.
+   */
+  async addStockForStaff(
+    userId: string,
+    dto: AddStaffStockDto,
+  ): Promise<StaffStockAddResponse> {
+    this.assertIsoDate(dto.stockDate);
+    if (dto.stockDate !== this.getIndianCalendarDate()) {
+      throw new BadRequestException(
+        'Staff can add stock only for the current business date.',
+      );
+    }
+    if (!Number.isInteger(dto.quantityToAdd) || dto.quantityToAdd <= 0) {
+      throw new BadRequestException('INVALID_STOCK_QUANTITY');
+    }
+
+    return this.dailyStockRepository.transaction(async (manager) => {
+      // Lock a stable per-product/per-date key even when the first stock row
+      // does not exist yet. This closes the unique-row creation race that a
+      // normal row lock cannot cover.
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `staff-stock:${dto.productId}:${dto.stockDate}`,
+      ]);
+      const product = await manager.getRepository(Product).findOneBy({
+        id: dto.productId,
+        isActive: true,
+      });
+      const category = product
+        ? await manager.getRepository(Category).findOneBy({
+            id: product.categoryId,
+            isActive: true,
+          })
+        : null;
+      if (!product || !category) {
+        throw new BadRequestException(
+          'A selected product or its category is unavailable or inactive.',
+        );
+      }
+
+      const stockRepository = manager.getRepository(DailyStock);
+      let stock = await stockRepository.findOne({
+        where: { productId: dto.productId, stockDate: dto.stockDate },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!stock) {
+        const previous = await stockRepository.findOne({
+          where: {
+            productId: dto.productId,
+            stockDate: LessThanOrEqual(dto.stockDate),
+          },
+          order: { stockDate: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        // Recheck after locking the preceding balance so parallel additions
+        // do not create two competing date rows.
+        stock = await stockRepository.findOne({
+          where: { productId: dto.productId, stockDate: dto.stockDate },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!stock) {
+          stock = stockRepository.create({
+            productId: dto.productId,
+            stockDate: dto.stockDate,
+            quantity: previous?.quantity ?? 0,
+          });
+          stock = await stockRepository.save(stock);
+        }
+      }
+
+      const previousQuantity = stock.quantity;
+      stock.quantity = previousQuantity + dto.quantityToAdd;
+      stock = await stockRepository.save(stock);
+      const movementRepository = manager.getRepository(StockMovement);
+      const movement = await movementRepository.save(
+        movementRepository.create({
+          productId: product.id,
+          stockDate: dto.stockDate,
+          movementType: StockMovementType.STOCK_ADDED,
+          quantityChange: dto.quantityToAdd,
+          previousQuantity,
+          newQuantity: stock.quantity,
+          performedBy: userId,
+        }),
+      );
+      return {
+        productId: product.id,
+        productName: product.name,
+        stockDate: dto.stockDate,
+        quantityAdded: dto.quantityToAdd,
+        previousQuantity,
+        newQuantity: stock.quantity,
+        movementId: movement.id,
+      };
+    });
   }
 
   private async writeStockItem(

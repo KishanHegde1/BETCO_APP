@@ -16,10 +16,16 @@ import {
   productNotFound,
 } from '../common/exceptions/api-error.exception';
 import { Dealer } from '../entities/dealer.entity';
+import {
+  OrderActivity,
+  OrderActivityType,
+} from '../entities/order-activity.entity';
 import { NotificationType } from '../entities/notification.entity';
-import { Order, OrderStatus } from '../entities/order.entity';
+import { DeliveryStatus, Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
+import { User } from '../entities/user.entity';
+import { UserRole } from '../common/constants/user-role.enum';
 import { DealersRepository } from '../repositories/dealers.repository';
 import {
   AdminOrderDetailsRow,
@@ -48,6 +54,9 @@ export interface OrderHistoryResponse {
   cancellationReason: string | null;
   billGenerated: boolean;
   billGeneratedAt: Date | null;
+  deliveryStatus: DeliveryStatus;
+  shippedAt: Date | null;
+  receivedAt: Date | null;
   totalItems: number;
   totalQuantity: number;
   totalApprovedQuantity: number | null;
@@ -85,6 +94,20 @@ export interface BillGenerationResponse {
   billGenerated: true;
   billGeneratedAt: Date;
   billGeneratedBy: string;
+}
+
+export interface ShipmentResponse {
+  id: string;
+  deliveryStatus: DeliveryStatus.SHIPPED;
+  shippedAt: Date;
+  shippedBy: string;
+}
+
+export interface ReceiptConfirmationResponse {
+  id: string;
+  deliveryStatus: DeliveryStatus.RECEIVED;
+  receivedAt: Date;
+  receivedBy: string;
 }
 
 export interface PaginatedAdminOrdersResponse {
@@ -132,6 +155,9 @@ export class OrdersService {
       cancellationReason: order.cancellationReason ?? null,
       billGenerated: order.billGenerated,
       billGeneratedAt: order.billGeneratedAt ?? null,
+      deliveryStatus: order.deliveryStatus ?? DeliveryStatus.NOT_READY,
+      shippedAt: order.shippedAt ?? null,
+      receivedAt: order.receivedAt ?? null,
       totalItems: totalsByOrderId.get(order.id)?.totalItems ?? 0,
       totalQuantity: totalsByOrderId.get(order.id)?.totalQuantity ?? 0,
       totalApprovedQuantity:
@@ -231,6 +257,13 @@ export class OrdersService {
       const itemIdByProduct = new Map(
         savedItems.map((item) => [item.productId, item.id]),
       );
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.ORDER_PLACED,
+        title: 'Order placed',
+        description: 'The dealer submitted this order.',
+        performedBy: userId,
+      });
 
       return {
         id: order.id,
@@ -241,6 +274,9 @@ export class OrdersService {
         cancellationReason: order.cancellationReason ?? null,
         billGenerated: order.billGenerated,
         billGeneratedAt: order.billGeneratedAt ?? null,
+        deliveryStatus: order.deliveryStatus ?? DeliveryStatus.NOT_READY,
+        shippedAt: null,
+        receivedAt: null,
         remarks: order.remarks ?? null,
         dealer: {
           id: dealer.id,
@@ -280,6 +316,11 @@ export class OrdersService {
       throw new NotFoundException('Order not found.');
     }
     return order;
+  }
+
+  /** The staff detail route deliberately reuses the same complete safe view. */
+  findOneForStaff(id: string): Promise<AdminOrderDetailsResponse> {
+    return this.findOneForAdmin(id);
   }
 
   findBillingQueue(
@@ -331,11 +372,21 @@ export class OrdersService {
       order.billGenerated = true;
       order.billGeneratedAt = generatedAt;
       order.billGeneratedBy = staffUserId;
+      order.deliveryStatus = DeliveryStatus.READY_FOR_DISPATCH;
       await orderRepository.save(order);
+
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.BILL_GENERATED,
+        title: 'Bill generated in Tally',
+        description: 'Staff confirmed that the bill was generated in Tally.',
+        performedBy: staffUserId,
+      });
 
       await this.notificationsService.create(
         {
           userId: dealer.userId,
+          orderId: order.id,
           type: NotificationType.BILL_GENERATED,
           title: 'Bill Generated',
           body: 'Your bill has been generated in Tally.',
@@ -357,6 +408,140 @@ export class OrdersService {
     query: StaffBillingQueueQueryDto,
   ): Promise<StaffBillingQueueOrder[]> {
     return this.ordersRepository.findStaffBilledOrders(query);
+  }
+
+  async markShipped(
+    id: string,
+    staffUserId: string,
+  ): Promise<ShipmentResponse> {
+    return this.ordersRepository.transaction(async (manager) => {
+      const orderRepository = manager.getRepository(Order);
+      const order = await orderRepository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) throw orderNotFound();
+      if (order.deliveryStatus === DeliveryStatus.RECEIVED) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_ALREADY_RECEIVED',
+          'This order has already been received.',
+        );
+      }
+      if (order.deliveryStatus === DeliveryStatus.SHIPPED) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_ALREADY_SHIPPED',
+          'This order has already been shipped.',
+        );
+      }
+      if (
+        order.status === OrderStatus.CANCELLED ||
+        order.status === OrderStatus.REJECTED ||
+        order.status !== OrderStatus.BILLED ||
+        !order.billGenerated
+      ) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_NOT_READY_FOR_SHIPMENT',
+          'Only billed, active orders can be marked as shipped.',
+        );
+      }
+
+      const dealer = await manager.getRepository(Dealer).findOneBy({
+        id: order.dealerId,
+      });
+      if (!dealer)
+        throw new NotFoundException('Dealer profile not found for this order.');
+      const shippedAt = new Date();
+      order.deliveryStatus = DeliveryStatus.SHIPPED;
+      order.shippedAt = shippedAt;
+      order.shippedBy = staffUserId;
+      await orderRepository.save(order);
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.ORDER_SHIPPED,
+        title: 'Order shipped',
+        description: `Order ${order.id} was marked as shipped.`,
+        performedBy: staffUserId,
+      });
+      await this.notificationsService.create(
+        {
+          userId: dealer.userId,
+          orderId: order.id,
+          type: NotificationType.ORDER_SHIPPED,
+          title: 'Order Shipped',
+          body: `Your order ${order.id} has been shipped.`,
+        },
+        manager,
+      );
+      await this.notifyAdministrators(manager, {
+        orderId: order.id,
+        type: NotificationType.ORDER_SHIPPED,
+        title: 'Order Shipped',
+        body: `${dealer.shopName ?? dealer.businessName} order ${order.id} was shipped.`,
+      });
+      return {
+        id: order.id,
+        deliveryStatus: DeliveryStatus.SHIPPED,
+        shippedAt,
+        shippedBy: staffUserId,
+      };
+    });
+  }
+
+  async confirmReceived(
+    id: string,
+    dealerUserId: string,
+  ): Promise<ReceiptConfirmationResponse> {
+    const dealer = await this.dealersRepository.findByUserId(dealerUserId);
+    if (!dealer) throw orderNotFound();
+    return this.ordersRepository.transaction(async (manager) => {
+      const orderRepository = manager.getRepository(Order);
+      const order = await orderRepository.findOne({
+        where: { id, dealerId: dealer.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) throw orderNotFound();
+      if (order.deliveryStatus === DeliveryStatus.RECEIVED) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_ALREADY_RECEIVED',
+          'This order has already been received.',
+        );
+      }
+      if (order.deliveryStatus !== DeliveryStatus.SHIPPED) {
+        throw new ApiErrorException(
+          409,
+          'ORDER_NOT_SHIPPED',
+          'Only shipped orders can be confirmed as received.',
+        );
+      }
+      const receivedAt = new Date();
+      order.deliveryStatus = DeliveryStatus.RECEIVED;
+      order.receivedAt = receivedAt;
+      order.receivedBy = dealerUserId;
+      await orderRepository.save(order);
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.ORDER_RECEIVED,
+        title: 'Order received',
+        description: `${dealer.shopName ?? dealer.businessName} confirmed receipt of order ${order.id}.`,
+        performedBy: dealerUserId,
+      });
+      await this.notifyAdministrators(manager, {
+        orderId: order.id,
+        type: NotificationType.ORDER_RECEIVED,
+        title: 'Order Received',
+        body: `${dealer.shopName ?? dealer.businessName} received Order ${order.id} on ${receivedAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}.`,
+      });
+      return {
+        id: order.id,
+        deliveryStatus: DeliveryStatus.RECEIVED,
+        receivedAt,
+        receivedBy: dealerUserId,
+      };
+    });
   }
 
   async updateStatusForAdmin(
@@ -508,6 +693,18 @@ export class OrdersService {
       order.adminRemarks = this.normalizeOptionalNote(adminRemarks);
       order.reviewedAt = new Date();
       await orderRepository.save(order);
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType:
+          order.status === OrderStatus.APPROVED
+            ? OrderActivityType.ORDER_APPROVED
+            : OrderActivityType.ORDER_PARTIALLY_APPROVED,
+        title:
+          order.status === OrderStatus.APPROVED
+            ? 'Order approved'
+            : 'Order partially approved',
+        description: order.adminRemarks ?? null,
+      });
     });
   }
 
@@ -544,6 +741,15 @@ export class OrdersService {
       order.reviewedAt = new Date();
       order.status = status;
       await orderRepository.save(order);
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.ORDER_CANCELLED,
+        title:
+          status === OrderStatus.CANCELLED
+            ? 'Order cancelled'
+            : 'Order rejected',
+        description: order.cancellationReason ?? order.adminRemarks ?? null,
+      });
     });
   }
 
@@ -688,5 +894,43 @@ export class OrdersService {
     const part = (type: Intl.DateTimeFormatPartTypes): string =>
       parts.find((item) => item.type === type)?.value ?? '';
     return `${part('year')}-${part('month')}-${part('day')}`;
+  }
+
+  private async recordActivity(
+    manager: import('typeorm').EntityManager,
+    input: {
+      orderId: string;
+      activityType: OrderActivityType;
+      title: string;
+      description?: string | null;
+      performedBy?: string | null;
+    },
+  ): Promise<void> {
+    // The guard keeps older isolated unit-test transaction doubles compatible;
+    // a real TypeORM entity manager always supplies this repository.
+    const repository = manager.getRepository(OrderActivity) as
+      Repository<OrderActivity> | undefined;
+    if (!repository) return;
+    await repository.save(repository.create(input));
+  }
+
+  private async notifyAdministrators(
+    manager: import('typeorm').EntityManager,
+    input: Omit<
+      import('../notifications/notifications.service').CreateNotificationInput,
+      'userId'
+    >,
+  ): Promise<void> {
+    const admins = await manager.getRepository(User).find({
+      where: { role: UserRole.ADMIN, isActive: true },
+    });
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsService.create(
+          { ...input, userId: admin.id },
+          manager,
+        ),
+      ),
+    );
   }
 }

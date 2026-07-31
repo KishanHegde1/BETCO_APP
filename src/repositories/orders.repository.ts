@@ -8,8 +8,10 @@ import {
 } from 'typeorm';
 
 import { Dealer } from '../entities/dealer.entity';
+import { Category } from '../entities/category.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
-import { Order, OrderStatus } from '../entities/order.entity';
+import { OrderActivity } from '../entities/order-activity.entity';
+import { DeliveryStatus, Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
@@ -42,6 +44,7 @@ export interface AdminOrderItemRow {
   productName: string;
   sku: string;
   unit: string;
+  categoryName: string | null;
   quantity: number;
   approvedQuantity: number | null;
   availableQuantity: number | null;
@@ -57,7 +60,25 @@ export interface AdminOrderDetailsRow extends AdminOrderSummaryRow {
   billGeneratedAt: Date | null;
   billGeneratedBy: string | null;
   billGeneratedByName: string | null;
+  deliveryStatus: DeliveryStatus;
+  shippedAt: Date | null;
+  shippedBy: string | null;
+  shippedByName: string | null;
+  receivedAt: Date | null;
+  receivedBy: string | null;
+  receivedByName: string | null;
+  activities: OrderActivityRow[];
   items: AdminOrderItemRow[];
+}
+
+export interface OrderActivityRow {
+  id: string;
+  activityType: string;
+  title: string;
+  description: string | null;
+  performedBy: string | null;
+  performedByName: string | null;
+  createdAt: Date;
 }
 
 export interface StaffBillingQueueItemRow {
@@ -107,6 +128,8 @@ export class OrdersRepository {
     @InjectRepository(Order) readonly repository: Repository<Order>,
     @InjectRepository(OrderItem)
     readonly orderItemsRepository: Repository<OrderItem>,
+    @InjectRepository(OrderActivity)
+    readonly orderActivitiesRepository: Repository<OrderActivity>,
   ) {}
 
   findByDealerId(dealerId: string): Promise<Order[]> {
@@ -183,6 +206,25 @@ export class OrdersRepository {
     return this.findDetails({ id, dealerId });
   }
 
+  async findActivities(orderId: string): Promise<OrderActivityRow[]> {
+    const rows = await this.orderActivitiesRepository
+      .createQueryBuilder('activity')
+      .leftJoin(User, 'performedBy', 'performedBy.id = activity.performed_by')
+      .select([
+        'activity.id AS "id"',
+        'activity.activity_type AS "activityType"',
+        'activity.title AS "title"',
+        'activity.description AS "description"',
+        'activity.performed_by AS "performedBy"',
+        'performedBy.username AS "performedByName"',
+        'activity.created_at AS "createdAt"',
+      ])
+      .where('activity.order_id = :orderId', { orderId })
+      .orderBy('activity.created_at', 'ASC')
+      .getRawMany<OrderActivityRow>();
+    return rows;
+  }
+
   async findStaffBillingQueue(
     options: StaffBillingQueueQueryDto,
   ): Promise<StaffBillingQueueOrderRow[]> {
@@ -211,6 +253,13 @@ export class OrdersRepository {
         '"order".created_at AS "createdAt"',
         '"order".bill_generated_at AS "billGeneratedAt"',
         'billGenerator.username AS "billGeneratedByName"',
+        '"order".delivery_status AS "deliveryStatus"',
+        '"order".shipped_at AS "shippedAt"',
+        '"order".shipped_by AS "shippedBy"',
+        'shippedBy.username AS "shippedByName"',
+        '"order".received_at AS "receivedAt"',
+        '"order".received_by AS "receivedBy"',
+        'receivedBy.username AS "receivedByName"',
         'dealer.id AS "dealerId"',
         'COALESCE(NULLIF(dealer.business_name, \'\'), "user".username) AS "dealerName"',
         'COALESCE(dealer.phone, "user".phone) AS "dealerPhone"',
@@ -360,13 +409,21 @@ export class OrdersRepository {
     }
     const row =
       await query.getRawOne<
-        Omit<AdminOrderDetailsRow, 'items' | 'totalItems' | 'totalQuantity'>
+        Omit<
+          AdminOrderDetailsRow,
+          | 'items'
+          | 'activities'
+          | 'totalItems'
+          | 'totalQuantity'
+          | 'totalApprovedQuantity'
+        >
       >();
     if (!row) return null;
 
     const items = await this.orderItemsRepository
       .createQueryBuilder('orderItem')
       .innerJoin(Product, 'product', 'product.id = orderItem.product_id')
+      .leftJoin(Category, 'category', 'category.id = product.category_id')
       .leftJoin(
         DailyStock,
         'stock',
@@ -384,6 +441,7 @@ export class OrdersRepository {
         'product.name AS "productName"',
         'product.sku AS "sku"',
         'product.unit AS "unit"',
+        'category.name AS "categoryName"',
         'orderItem.quantity AS "quantity"',
         'orderItem.approved_quantity AS "approvedQuantity"',
         'stock.quantity AS "availableQuantity"',
@@ -400,6 +458,7 @@ export class OrdersRepository {
         item.availableQuantity == null ? null : Number(item.availableQuantity),
     }));
 
+    const activities = await this.findActivities(id);
     return {
       ...row,
       billGenerated: this.toBoolean(row.billGenerated),
@@ -412,6 +471,7 @@ export class OrdersRepository {
         (sum, item) => sum + (item.approvedQuantity ?? 0),
         0,
       ),
+      activities,
       items: normalizedItems,
     };
   }
@@ -425,7 +485,9 @@ export class OrdersRepository {
         User,
         'billGenerator',
         'billGenerator.id = "order".bill_generated_by',
-      );
+      )
+      .leftJoin(User, 'shippedBy', 'shippedBy.id = "order".shipped_by')
+      .leftJoin(User, 'receivedBy', 'receivedBy.id = "order".received_by');
   }
 
   private adminSummaryQuery(): SelectQueryBuilder<Order> {

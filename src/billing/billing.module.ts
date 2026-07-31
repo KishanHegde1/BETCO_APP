@@ -5,9 +5,13 @@ import { DealerInvoice, DealerInvoiceItem } from '../entities';
 import { BillingRepository } from '../repositories/billing.repository';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
+import { TallyModule } from '../tally/tally.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([DealerInvoice, DealerInvoiceItem])],
+  imports: [
+    TypeOrmModule.forFeature([DealerInvoice, DealerInvoiceItem]),
+    TallyModule,
+  ],
   controllers: [BillingController],
   providers: [BillingService, BillingRepository],
   exports: [BillingService],

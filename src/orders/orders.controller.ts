@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -56,5 +57,16 @@ export class OrdersController {
     @Body() createOrderDto: CreateOrderDto,
   ): Promise<CreatedOrderResponse> {
     return this.ordersService.createMyOrder(request.user.sub, createOrderDto);
+  }
+
+  @Patch('my-orders/:id/confirm-received')
+  @ApiOperation({
+    summary: "Confirm receipt of the signed-in dealer's shipped order",
+  })
+  confirmReceived(
+    @Req() request: Request & { user: JwtPayload },
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.ordersService.confirmReceived(id, request.user.sub);
   }
 }

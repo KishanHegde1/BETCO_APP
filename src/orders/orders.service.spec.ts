@@ -571,6 +571,7 @@ describe('OrdersService', () => {
     expect(notificationsService.create).toHaveBeenCalledWith(
       {
         userId: 'dealer-user-1',
+        orderId: 'order-1',
         type: NotificationType.BILL_GENERATED,
         title: 'Bill Generated',
         body: 'Your bill has been generated in Tally.',

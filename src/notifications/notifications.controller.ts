@@ -1,4 +1,12 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
@@ -20,5 +28,13 @@ export class NotificationsController {
   @Get('my')
   findMine(@Req() request: { user: JwtPayload }): Promise<Notification[]> {
     return this.notificationsService.findMine(request.user.sub);
+  }
+
+  @Patch('my/:id/read')
+  markRead(
+    @Req() request: { user: JwtPayload },
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<Notification> {
+    return this.notificationsService.markMineRead(request.user.sub, id);
   }
 }

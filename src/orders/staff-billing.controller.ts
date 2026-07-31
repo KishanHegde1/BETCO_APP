@@ -56,6 +56,15 @@ export class StaffBillingController {
     return this.ordersService.findBilledOrdersForStaff(query);
   }
 
+  @Get(':orderId')
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Get complete order details for staff dispatch work',
+  })
+  findOne(@Param('orderId', new ParseUUIDPipe()) id: string) {
+    return this.ordersService.findOneForStaff(id);
+  }
+
   @Patch(':orderId/mark-billed')
   @Roles(UserRole.STAFF)
   @ApiOperation({
@@ -69,5 +78,15 @@ export class StaffBillingController {
     @Req() request: { user: JwtPayload },
   ): Promise<BillGenerationResponse> {
     return this.ordersService.generateBillForStaff(id, request.user.sub);
+  }
+
+  @Patch(':orderId/mark-shipped')
+  @Roles(UserRole.STAFF)
+  @ApiOperation({ summary: 'Mark an eligible billed order as shipped' })
+  markShipped(
+    @Param('orderId', new ParseUUIDPipe()) id: string,
+    @Req() request: { user: JwtPayload },
+  ) {
+    return this.ordersService.markShipped(id, request.user.sub);
   }
 }
