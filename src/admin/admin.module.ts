@@ -5,6 +5,7 @@ import { Category } from '../entities/category.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Dealer } from '../entities/dealer.entity';
 import { Order } from '../entities/order.entity';
+import { OrderActivity } from '../entities/order-activity.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
@@ -29,6 +30,7 @@ import { AdminDashboardService } from './admin-dashboard.service';
       User,
       Order,
       OrderItem,
+      OrderActivity,
       DealerInvoice,
     ]),
   ],
