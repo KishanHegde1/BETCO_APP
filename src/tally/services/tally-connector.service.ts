@@ -452,9 +452,12 @@ export class TallyConnectorService {
       input.partyLedgerName,
     );
     invoice.invoiceAmount = this.money(input.amount);
-    invoice.pendingAmount = this.money(input.pendingAmount);
-    invoice.paidAmount = this.paidAmount(input.amount, input.pendingAmount);
-    invoice.paymentStatus = this.paymentStatus(input.amount, input.pendingAmount);
+    // Tally Receipts reduce the dealer ledger as a whole. They are not
+    // allocations against individual invoices, so an invoice must never be
+    // labelled paid, pending, or partially paid by this application.
+    invoice.pendingAmount = '0.00';
+    invoice.paidAmount = '0.00';
+    invoice.paymentStatus = 'NOT_APPLICABLE';
     invoice.discountAmount = this.money(input.discountAmount);
     invoice.taxAmount = this.money(input.taxAmount);
     invoice.isCancelled = input.isCancelled ?? false;
@@ -589,22 +592,6 @@ export class TallyConnectorService {
 
   private quantity(value: number): string {
     return Math.abs(value).toFixed(3);
-  }
-
-  private paidAmount(total: number, pending: number): string {
-    // pendingAmount is a required Tally-agent value. It permits a safe amount
-    // calculation, but we never try to allocate individual Receipt vouchers.
-    if (total > 0 && pending >= 0 && pending <= total) {
-      return this.money(total - pending);
-    }
-    return '0.00';
-  }
-
-  private paymentStatus(total: number, pending: number): string {
-    if (total <= 0 || pending < 0) return 'UNKNOWN';
-    if (pending === 0) return 'PAID';
-    if (pending >= total) return 'PENDING';
-    return 'PARTIALLY_PAID';
   }
 
   private safePdfUrl(value: string | undefined): string | null {

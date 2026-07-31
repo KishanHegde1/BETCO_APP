@@ -21,6 +21,25 @@ function rawOneQuery(result: Record<string, string>) {
   return query;
 }
 
+function oneQuery<T>(result: T) {
+  const query = {
+    where: jest.fn(),
+    andWhere: jest.fn(),
+    orderBy: jest.fn(),
+    addOrderBy: jest.fn(),
+    getOne: jest.fn().mockResolvedValue(result),
+  };
+  for (const method of [
+    query.where,
+    query.andWhere,
+    query.orderBy,
+    query.addOrderBy,
+  ]) {
+    method.mockReturnValue(query);
+  }
+  return query;
+}
+
 function invoicePageQuery(items: Record<string, unknown>[]) {
   const countQuery = { getCount: jest.fn().mockResolvedValue(items.length) };
   const query = {
@@ -156,10 +175,12 @@ describe('TallyReadService dealer isolation', () => {
     });
     const invoiceTotals = rawOneQuery({ total: '0', count: '1' });
     const paymentTotals = rawOneQuery({ total: '0', count: '0' });
+    const lastReceipt = oneQuery(null);
     repository.invoices.createQueryBuilder.mockReturnValue(invoiceTotals);
-    repository.payments.createQueryBuilder.mockReturnValue(paymentTotals);
+    repository.payments.createQueryBuilder
+      .mockReturnValueOnce(paymentTotals)
+      .mockReturnValueOnce(lastReceipt);
     repository.invoices.findOne.mockResolvedValue(null);
-    repository.payments.findOne.mockResolvedValue(null);
 
     await expect(service.dealerSummary('user-a')).resolves.toMatchObject({
       dealerId: 'dealer-a',
@@ -173,6 +194,9 @@ describe('TallyReadService dealer isolation', () => {
     expect(invoiceTotals.where).toHaveBeenCalledWith(
       'invoice.dealer_id = :dealerId',
       { dealerId: 'dealer-a' },
+    );
+    expect(paymentTotals.andWhere).toHaveBeenCalledWith(
+      "LOWER(TRIM(payment.voucher_type)) = 'receipt'",
     );
   });
 

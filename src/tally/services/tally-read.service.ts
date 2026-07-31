@@ -82,15 +82,19 @@ export class TallyReadService {
           .select('COALESCE(SUM(payment.amount), 0)', 'total')
           .addSelect('COUNT(*)', 'count')
           .where('payment.dealer_id = :dealerId', { dealerId: dealer.id })
+          .andWhere("LOWER(TRIM(payment.voucher_type)) = 'receipt'")
           .getRawOne<{ total: string; count: string }>(),
         this.repository.invoices.findOne({
           where: { dealerId: dealer.id },
           order: { invoiceDate: 'DESC', createdAt: 'DESC' },
         }),
-        this.repository.payments.findOne({
-          where: { dealerId: dealer.id },
-          order: { paymentDate: 'DESC', createdAt: 'DESC' },
-        }),
+        this.repository.payments
+          .createQueryBuilder('payment')
+          .where('payment.dealer_id = :dealerId', { dealerId: dealer.id })
+          .andWhere("LOWER(TRIM(payment.voucher_type)) = 'receipt'")
+          .orderBy('payment.payment_date', 'DESC')
+          .addOrderBy('payment.created_at', 'DESC')
+          .getOne(),
       ]);
     const closingBalance = this.number(
       ledger?.closingBalance ?? mapping.lastClosingBalance,
@@ -155,8 +159,13 @@ export class TallyReadService {
 
   async dealerPayment(userId: string, id: string) {
     const dealer = await this.requireDealer(userId);
-    const payment = await this.repository.payments.findOneBy({ id, dealerId: dealer.id });
-    if (!payment) throw new NotFoundException('Payment not found.');
+    const payment = await this.repository.payments
+      .createQueryBuilder('payment')
+      .where('payment.id = :id', { id })
+      .andWhere('payment.dealer_id = :dealerId', { dealerId: dealer.id })
+      .andWhere("LOWER(TRIM(payment.voucher_type)) = 'receipt'")
+      .getOne();
+    if (!payment) throw new NotFoundException('Receipt not found.');
     return this.paymentDetail(payment);
   }
 
@@ -165,7 +174,13 @@ export class TallyReadService {
     this.validateDates(query);
     const [invoices, payments] = await Promise.all([
       this.repository.invoices.find({ where: { dealerId: dealer.id }, order: { invoiceDate: 'ASC', createdAt: 'ASC' } }),
-      this.repository.payments.find({ where: { dealerId: dealer.id }, order: { paymentDate: 'ASC', createdAt: 'ASC' } }),
+      this.repository.payments
+        .createQueryBuilder('payment')
+        .where('payment.dealer_id = :dealerId', { dealerId: dealer.id })
+        .andWhere("LOWER(TRIM(payment.voucher_type)) = 'receipt'")
+        .orderBy('payment.payment_date', 'ASC')
+        .addOrderBy('payment.created_at', 'ASC')
+        .getMany(),
     ]);
     const entries = [
       ...invoices.filter((item) => !item.isCancelled).map((item) => ({
@@ -521,7 +536,6 @@ export class TallyReadService {
     if (dealerId) builder.where('invoice.dealer_id = :dealerId', { dealerId });
     if (query.fromDate) builder.andWhere('invoice.invoice_date >= :fromDate', { fromDate: query.fromDate });
     if (query.toDate) builder.andWhere('invoice.invoice_date <= :toDate', { toDate: query.toDate });
-    if (query.status) builder.andWhere('invoice.payment_status = :status', { status: query.status });
     const search = query.search?.trim();
     if (search) builder.andWhere(new Brackets((nested) => nested.where('invoice.invoice_number ILIKE :search', { search: `%${search}%` }).orWhere('invoice.voucher_type ILIKE :search', { search: `%${search}%` }).orWhere('invoice.source_metadata ->> \'referenceNumber\' ILIKE :search', { search: `%${search}%` })));
     const total = await builder.clone().getCount();
@@ -534,6 +548,7 @@ export class TallyReadService {
     this.validateDates(query);
     const builder = this.repository.payments.createQueryBuilder('payment');
     if (dealerId) builder.where('payment.dealer_id = :dealerId', { dealerId });
+    builder.andWhere("LOWER(TRIM(payment.voucher_type)) = 'receipt'");
     if (query.fromDate) builder.andWhere('payment.payment_date >= :fromDate', { fromDate: query.fromDate });
     if (query.toDate) builder.andWhere('payment.payment_date <= :toDate', { toDate: query.toDate });
     if (query.paymentMode?.trim()) builder.andWhere('payment.payment_mode ILIKE :mode', { mode: `%${query.paymentMode.trim()}%` });
@@ -558,9 +573,6 @@ export class TallyReadService {
       voucherType: item.voucherType,
       partyLedgerName: item.partyLedgerName,
       totalAmount: invoiceAmount,
-      pendingAmount: this.number(item.pendingAmount),
-      paidAmount: this.number(item.paidAmount),
-      paymentStatus: item.paymentStatus,
       pdfAvailable: item.pdfStatus === 'AVAILABLE' && Boolean(item.pdfUrl),
     };
   }

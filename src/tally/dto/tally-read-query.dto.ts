@@ -44,10 +44,6 @@ export class TallyPageQueryDto {
 
 export class TallyInvoiceQueryDto extends TallyPageQueryDto {
   @IsOptional()
-  @IsIn(['PENDING', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'UNKNOWN'])
-  status?: string;
-
-  @IsOptional()
   @IsIn(['voucherDate', 'amount', 'createdAt'])
   sortBy: 'voucherDate' | 'amount' | 'createdAt' = 'voucherDate';
 
