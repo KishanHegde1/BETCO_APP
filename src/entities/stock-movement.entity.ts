@@ -4,9 +4,10 @@ import { BaseEntity } from './base.entity';
 
 export enum StockMovementType {
   STOCK_ADDED = 'STOCK_ADDED',
+  STOCK_REDUCED = 'STOCK_REDUCED',
 }
 
-/** Append-only evidence for staff stock additions. */
+/** Append-only evidence for staff stock adjustments. */
 @Entity({ name: 'stock_movements' })
 @Index(['productId', 'stockDate'])
 export class StockMovement extends BaseEntity {

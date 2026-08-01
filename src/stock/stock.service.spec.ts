@@ -78,4 +78,15 @@ describe('StockService', () => {
     );
     expect(repository.findCatalogueStockForDate).not.toHaveBeenCalled();
   });
+
+  it('rejects a zero staff stock reduction before starting a transaction', async () => {
+    await expect(
+      service.reduceStockForStaff('staff-1', {
+        productId: 'product-1',
+        quantityToReduce: 0,
+        stockDate: '2026-08-01',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.transaction).not.toHaveBeenCalled();
+  });
 });

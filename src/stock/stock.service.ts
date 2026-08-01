@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { EntityManager, LessThanOrEqual } from 'typeorm';
 
 import { DailyStock } from '../entities/daily-stock.entity';
@@ -22,12 +26,32 @@ import {
   isoDateValidation,
 } from './dto/admin-daily-stock.dto';
 import { AddStaffStockDto } from './dto/add-staff-stock.dto';
+import { ReduceStaffStockDto } from './dto/reduce-staff-stock.dto';
 
 export interface StaffStockAddResponse {
   productId: string;
   productName: string;
   stockDate: string;
   quantityAdded: number;
+  previousQuantity: number;
+  newQuantity: number;
+  movementId: string;
+}
+
+export interface StaffStockReductionResponse {
+  productId: string;
+  productName: string;
+  stockDate: string;
+  quantityReduced: number;
+  previousQuantity: number;
+  newQuantity: number;
+  movementId: string;
+}
+
+interface StaffStockAdjustment {
+  productId: string;
+  productName: string;
+  stockDate: string;
   previousQuantity: number;
   newQuantity: number;
   movementId: string;
@@ -140,22 +164,65 @@ export class StockService {
     return this.getAdminStockForDate(targetDate, {});
   }
 
-  /**
-   * Adds stock only.  Both the current balance and an append-only audit row
-   * are committed together, while the balance row is pessimistically locked.
-   */
+  /** Adds stock, recording an immutable audited stock movement. */
   async addStockForStaff(
     userId: string,
     dto: AddStaffStockDto,
   ): Promise<StaffStockAddResponse> {
-    this.assertIsoDate(dto.stockDate);
-    if (dto.stockDate !== this.getIndianCalendarDate()) {
-      throw new BadRequestException(
-        'Staff can add stock only for the current business date.',
-      );
-    }
     if (!Number.isInteger(dto.quantityToAdd) || dto.quantityToAdd <= 0) {
       throw new BadRequestException('INVALID_STOCK_QUANTITY');
+    }
+
+    const adjustment = await this.adjustStockForStaff({
+      userId,
+      productId: dto.productId,
+      stockDate: dto.stockDate,
+      quantityChange: dto.quantityToAdd,
+      movementType: StockMovementType.STOCK_ADDED,
+    });
+    return { ...adjustment, quantityAdded: dto.quantityToAdd };
+  }
+
+  /**
+   * Records an audited stock reduction.  A row-level transaction guarantees
+   * that a concurrent adjustment cannot take a product below zero.
+   */
+  async reduceStockForStaff(
+    userId: string,
+    dto: ReduceStaffStockDto,
+  ): Promise<StaffStockReductionResponse> {
+    if (!Number.isInteger(dto.quantityToReduce) || dto.quantityToReduce <= 0) {
+      throw new BadRequestException('INVALID_STOCK_QUANTITY');
+    }
+
+    const adjustment = await this.adjustStockForStaff({
+      userId,
+      productId: dto.productId,
+      stockDate: dto.stockDate,
+      quantityChange: -dto.quantityToReduce,
+      movementType: StockMovementType.STOCK_REDUCED,
+    });
+    return { ...adjustment, quantityReduced: dto.quantityToReduce };
+  }
+
+  private async adjustStockForStaff({
+    userId,
+    productId,
+    stockDate,
+    quantityChange,
+    movementType,
+  }: {
+    userId: string;
+    productId: string;
+    stockDate: string;
+    quantityChange: number;
+    movementType: StockMovementType;
+  }): Promise<StaffStockAdjustment> {
+    this.assertIsoDate(stockDate);
+    if (stockDate !== this.getIndianCalendarDate()) {
+      throw new BadRequestException(
+        'Staff can adjust stock only for the current business date.',
+      );
     }
 
     return this.dailyStockRepository.transaction(async (manager) => {
@@ -163,10 +230,10 @@ export class StockService {
       // does not exist yet. This closes the unique-row creation race that a
       // normal row lock cannot cover.
       await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-        `staff-stock:${dto.productId}:${dto.stockDate}`,
+        `staff-stock:${productId}:${stockDate}`,
       ]);
       const product = await manager.getRepository(Product).findOneBy({
-        id: dto.productId,
+        id: productId,
         isActive: true,
       });
       const category = product
@@ -183,14 +250,14 @@ export class StockService {
 
       const stockRepository = manager.getRepository(DailyStock);
       let stock = await stockRepository.findOne({
-        where: { productId: dto.productId, stockDate: dto.stockDate },
+        where: { productId, stockDate },
         lock: { mode: 'pessimistic_write' },
       });
       if (!stock) {
         const previous = await stockRepository.findOne({
           where: {
-            productId: dto.productId,
-            stockDate: LessThanOrEqual(dto.stockDate),
+            productId,
+            stockDate: LessThanOrEqual(stockDate),
           },
           order: { stockDate: 'DESC' },
           lock: { mode: 'pessimistic_write' },
@@ -198,13 +265,13 @@ export class StockService {
         // Recheck after locking the preceding balance so parallel additions
         // do not create two competing date rows.
         stock = await stockRepository.findOne({
-          where: { productId: dto.productId, stockDate: dto.stockDate },
+          where: { productId, stockDate },
           lock: { mode: 'pessimistic_write' },
         });
         if (!stock) {
           stock = stockRepository.create({
-            productId: dto.productId,
-            stockDate: dto.stockDate,
+            productId,
+            stockDate,
             quantity: previous?.quantity ?? 0,
           });
           stock = await stockRepository.save(stock);
@@ -212,15 +279,21 @@ export class StockService {
       }
 
       const previousQuantity = stock.quantity;
-      stock.quantity = previousQuantity + dto.quantityToAdd;
+      const newQuantity = previousQuantity + quantityChange;
+      if (newQuantity < 0) {
+        throw new ConflictException(
+          `Only ${previousQuantity} units are available for this reduction.`,
+        );
+      }
+      stock.quantity = newQuantity;
       stock = await stockRepository.save(stock);
       const movementRepository = manager.getRepository(StockMovement);
       const movement = await movementRepository.save(
         movementRepository.create({
           productId: product.id,
-          stockDate: dto.stockDate,
-          movementType: StockMovementType.STOCK_ADDED,
-          quantityChange: dto.quantityToAdd,
+          stockDate,
+          movementType,
+          quantityChange,
           previousQuantity,
           newQuantity: stock.quantity,
           performedBy: userId,
@@ -229,8 +302,7 @@ export class StockService {
       return {
         productId: product.id,
         productName: product.name,
-        stockDate: dto.stockDate,
-        quantityAdded: dto.quantityToAdd,
+        stockDate,
         previousQuantity,
         newQuantity: stock.quantity,
         movementId: movement.id,

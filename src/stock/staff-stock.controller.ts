@@ -12,7 +12,12 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { AddStaffStockDto } from './dto/add-staff-stock.dto';
-import { StaffStockAddResponse, StockService } from './stock.service';
+import { ReduceStaffStockDto } from './dto/reduce-staff-stock.dto';
+import {
+  StaffStockAddResponse,
+  StaffStockReductionResponse,
+  StockService,
+} from './stock.service';
 
 @ApiTags('Staff Stock')
 @ApiBearerAuth()
@@ -34,5 +39,20 @@ export class StaffStockController {
     @Body() dto: AddStaffStockDto,
   ): Promise<StaffStockAddResponse> {
     return this.stockService.addStockForStaff(request.user.sub, dto);
+  }
+
+  @Post('reduce')
+  @ApiOperation({
+    summary:
+      'Reduce the current stock balance without allowing a negative value',
+  })
+  @ApiCreatedResponse({
+    description: 'The reduction and immutable audit record were saved.',
+  })
+  reduce(
+    @Req() request: { user: JwtPayload },
+    @Body() dto: ReduceStaffStockDto,
+  ): Promise<StaffStockReductionResponse> {
+    return this.stockService.reduceStockForStaff(request.user.sub, dto);
   }
 }
