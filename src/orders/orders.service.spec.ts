@@ -5,6 +5,7 @@ import { Dealer } from '../entities/dealer.entity';
 import { Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
+import { User } from '../entities/user.entity';
 import { NotificationType } from '../entities/notification.entity';
 import { OrdersService } from './orders.service';
 
@@ -26,6 +27,7 @@ describe('OrdersService', () => {
     create: jest.fn(),
     save: jest.fn(),
   };
+  const userRepository = { findOneBy: jest.fn() };
   const productRepository = { findOneBy: jest.fn() };
   const stockRepository = {
     findOne: jest.fn(),
@@ -54,6 +56,7 @@ describe('OrdersService', () => {
     jest.resetAllMocks();
     manager.getRepository.mockImplementation((entity) => {
       if (entity === Dealer) return dealerRepository;
+      if (entity === User) return userRepository;
       if (entity === Product) return productRepository;
       if (entity === DailyStock) return stockRepository;
       if (entity === Order) return orderRepository;
@@ -72,6 +75,12 @@ describe('OrdersService', () => {
     dealerRepository.findOneBy.mockResolvedValue({
       id: 'dealer-1',
       userId: 'dealer-user-1',
+      businessName: 'Example Electricals',
+      shopName: 'Example Electricals',
+    });
+    userRepository.findOneBy.mockResolvedValue({
+      id: 'dealer-user-1',
+      isActive: true,
     });
     notificationsService.create.mockResolvedValue({ id: 'notification-1' });
     productRepository.findOneBy.mockResolvedValue({
@@ -152,6 +161,33 @@ describe('OrdersService', () => {
         quantity: 3,
       }),
     ]);
+  });
+
+  it('lets staff record a dealer phone order without reducing stock', async () => {
+    await expect(
+      service.createForStaff('staff-user-1', {
+        dealerId: 'dealer-1',
+        items: [{ productId: 'product-1', quantity: 6 }],
+        remarks: 'Dealer called the office.',
+      }),
+    ).resolves.toMatchObject({
+      id: 'order-1',
+      status: OrderStatus.PENDING,
+      dealer: { id: 'dealer-1' },
+      totalQuantity: 6,
+    });
+
+    expect(stockRepository.findOne).not.toHaveBeenCalled();
+    expect(orderRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ dealerId: 'dealer-1' }),
+    );
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'dealer-user-1',
+        title: 'Order recorded',
+      }),
+      manager,
+    );
   });
 
   it('returns a conflict when preliminary stock cannot satisfy the order', async () => {

@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -21,8 +23,12 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { StaffBillingQueueQueryDto } from './dto/staff-billing-queue-query.dto';
+import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
+import { CreateStaffOrderDto } from './dto/create-staff-order.dto';
+import { StaffDealerQueryDto } from './dto/staff-dealer-query.dto';
 import {
   BillGenerationResponse,
+  CreatedOrderResponse,
   OrdersService,
   StaffBillingQueueOrder,
 } from './orders.service';
@@ -34,6 +40,32 @@ import {
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class StaffBillingController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Get('dealers')
+  @Roles(UserRole.STAFF)
+  @ApiOperation({ summary: 'List active dealers for staff order entry' })
+  findDealers(@Query() query: StaffDealerQueryDto) {
+    return this.ordersService.findDealersForStaffOrder(query.search);
+  }
+
+  @Post()
+  @Roles(UserRole.STAFF)
+  @ApiOperation({
+    summary: 'Record a dealer phone or notebook order for admin approval',
+  })
+  create(
+    @Req() request: { user: JwtPayload },
+    @Body() dto: CreateStaffOrderDto,
+  ): Promise<CreatedOrderResponse> {
+    return this.ordersService.createForStaff(request.user.sub, dto);
+  }
+
+  @Get('recorded')
+  @Roles(UserRole.STAFF)
+  @ApiOperation({ summary: 'List all orders recorded for staff operations' })
+  findRecorded(@Query() query: AdminOrdersQueryDto) {
+    return this.ordersService.findAllForStaff(query);
+  }
 
   @Get('billing-queue')
   @Roles(UserRole.STAFF)

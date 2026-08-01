@@ -37,6 +37,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 import { AdminOrdersQueryDto } from './dto/admin-orders-query.dto';
 import { CreateOrderDto, OrderItemDto } from './dto/create-order.dto';
+import { CreateStaffOrderDto } from './dto/create-staff-order.dto';
 import {
   ApprovedOrderItemDto,
   UpdateOrderStatusDto,
@@ -78,6 +79,15 @@ export interface CreatedOrderResponse extends OrderHistoryResponse {
     approvedQuantity: number | null;
     unit: string;
   }>;
+}
+
+export interface StaffOrderDealerResponse {
+  id: string;
+  businessName: string;
+  shopName: string | null;
+  phone: string | null;
+  contactNumber: string | null;
+  dealerCode: string | null;
 }
 
 export type AdminOrderSummaryResponse = AdminOrderSummaryRow;
@@ -293,6 +303,144 @@ export class OrdersService {
         })),
       };
     });
+  }
+
+  /**
+   * Records an order that a dealer placed by phone or in person.  The order is
+   * intentionally PENDING until an administrator approves it; no stock is
+   * reduced at this point.
+   */
+  async createForStaff(
+    staffUserId: string,
+    createOrderDto: CreateStaffOrderDto,
+  ): Promise<CreatedOrderResponse> {
+    const staff = await this.usersService.findActiveById(staffUserId);
+    if (!staff) {
+      throw new NotFoundException('Staff account not found.');
+    }
+
+    this.assertNoDuplicateProducts(createOrderDto.items);
+    const items = [...createOrderDto.items].sort((a, b) =>
+      a.productId.localeCompare(b.productId),
+    );
+
+    return this.ordersRepository.transaction(async (manager) => {
+      const dealerRepository = manager.getRepository(Dealer);
+      const dealer = await dealerRepository.findOneBy({
+        id: createOrderDto.dealerId,
+      });
+      if (!dealer) {
+        throw new NotFoundException('Selected dealer was not found.');
+      }
+
+      const dealerUser = await manager.getRepository(User).findOneBy({
+        id: dealer.userId,
+        role: UserRole.USER,
+        isActive: true,
+      });
+      if (!dealerUser) {
+        throw new NotFoundException('Selected dealer account is inactive.');
+      }
+
+      const productRepository = manager.getRepository(Product);
+      const bookedItems: CreatedOrderResponse['items'] = [];
+      for (const item of items) {
+        const product = await productRepository.findOneBy({
+          id: item.productId,
+        });
+        if (!product) throw productNotFound();
+        if (!product.isActive) throw productInactive();
+
+        bookedItems.push({
+          id: '',
+          productId: product.id,
+          productName: product.name,
+          sku: product.sku,
+          requestedQuantity: item.quantity,
+          approvedQuantity: null,
+          unit: product.unit,
+        });
+      }
+
+      const orderRepository = manager.getRepository(Order);
+      const order = await orderRepository.save(
+        orderRepository.create({
+          dealerId: dealer.id,
+          status: OrderStatus.PENDING,
+          remarks: createOrderDto.remarks?.trim() || undefined,
+        }),
+      );
+
+      const orderItemsRepository = manager.getRepository(OrderItem);
+      const savedItems = await orderItemsRepository.save(
+        items.map((item) =>
+          orderItemsRepository.create({
+            orderId: order.id,
+            productId: item.productId,
+            quantity: item.quantity,
+          }),
+        ),
+      );
+      const itemIdByProduct = new Map(
+        savedItems.map((item) => [item.productId, item.id]),
+      );
+
+      await this.recordActivity(manager, {
+        orderId: order.id,
+        activityType: OrderActivityType.ORDER_PLACED,
+        title: 'Order recorded by staff',
+        description: 'Staff recorded this dealer order for admin approval.',
+        performedBy: staffUserId,
+      });
+      await this.notificationsService.create(
+        {
+          userId: dealer.userId,
+          orderId: order.id,
+          type: NotificationType.ORDER_UPDATED,
+          title: 'Order recorded',
+          body: 'Betco staff recorded your order. It is awaiting admin approval.',
+        },
+        manager,
+      );
+
+      return {
+        id: order.id,
+        orderId: order.id,
+        orderNumber: order.id,
+        status: order.status,
+        updatedAt: order.updatedAt,
+        cancellationReason: null,
+        billGenerated: false,
+        billGeneratedAt: null,
+        deliveryStatus: DeliveryStatus.NOT_READY,
+        shippedAt: null,
+        receivedAt: null,
+        remarks: order.remarks ?? null,
+        dealer: {
+          id: dealer.id,
+          businessName: dealer.businessName,
+          shopName: dealer.shopName ?? dealer.businessName,
+        },
+        createdAt: order.createdAt,
+        totalItems: items.length,
+        totalQuantity: items.reduce((sum, item) => sum + item.quantity, 0),
+        totalApprovedQuantity: null,
+        items: bookedItems.map((item) => ({
+          ...item,
+          id: itemIdByProduct.get(item.productId) ?? '',
+        })),
+      };
+    });
+  }
+
+  findDealersForStaffOrder(search?: string): Promise<StaffOrderDealerResponse[]> {
+    return this.dealersRepository.findForStaffOrder(search);
+  }
+
+  findAllForStaff(
+    query: AdminOrdersQueryDto,
+  ): Promise<PaginatedAdminOrdersResponse> {
+    return this.findAllForAdmin(query);
   }
 
   async findAllForAdmin(

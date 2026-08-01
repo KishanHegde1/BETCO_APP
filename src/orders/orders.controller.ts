@@ -1,11 +1,9 @@
 import {
-  Body,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
-  Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -17,9 +15,7 @@ import { UserRole } from '../common/constants/user-role.enum';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { CreateOrderDto } from './dto/create-order.dto';
 import {
-  CreatedOrderResponse,
   DealerOrderDetailsResponse,
   OrderHistoryResponse,
   OrdersService,
@@ -48,15 +44,6 @@ export class OrdersController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<DealerOrderDetailsResponse> {
     return this.ordersService.findOneForDealer(request.user.sub, id);
-  }
-
-  @Post()
-  @ApiOperation({ summary: "Book today's available stock" })
-  createMyOrder(
-    @Req() request: Request & { user: JwtPayload },
-    @Body() createOrderDto: CreateOrderDto,
-  ): Promise<CreatedOrderResponse> {
-    return this.ordersService.createMyOrder(request.user.sub, createOrderDto);
   }
 
   @Patch('my-orders/:id/confirm-received')
