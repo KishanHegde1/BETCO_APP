@@ -37,10 +37,10 @@ export class TallyLedgerSyncDto {
   @MaxLength(255)
   sourceKey!: string;
 
-  @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(255)
-  guid?: string;
+  guid!: string;
 
   @IsString()
   @IsNotEmpty()

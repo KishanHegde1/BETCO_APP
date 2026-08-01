@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
-import { EntityManager } from 'typeorm';
+import { EntityManager, IsNull } from 'typeorm';
 
 import { formatBusinessDate } from '../../common/utils/business-date.util';
 import {
@@ -390,21 +390,12 @@ export class TallyConnectorService {
       mappingCache.get(this.normalizedKey(voucher.partyLedgerName));
     if (known) return known;
 
-    return this.resolveLedgerMapping(
-      manager,
-      companyName,
-      {
-        sourceKey: voucher.partyLedgerGuid ?? voucher.partyLedgerName,
-        guid: voucher.partyLedgerGuid,
-        name: voucher.partyLedgerName,
-        gstin: voucher.partyGstin,
-        phone: voucher.partyPhone,
-        dealerCode: voucher.dealerCode,
-        openingBalance: 0,
-        closingBalance: 0,
-      },
-      mappingCache,
-    );
+    // A Day Book voucher does not contain the authoritative ledger balances.
+    // Never fabricate a ledger with a name-only key and zero amounts here;
+    // doing so used to overwrite valid balances and create duplicate rows.
+    // Mapping is established only from the validated ledger collection or an
+    // existing explicit mapping above.
+    return undefined;
   }
 
   private async upsertInvoice(
@@ -557,15 +548,37 @@ export class TallyConnectorService {
     mapping?: TallyDealerMapping,
   ): Promise<{ ledger: TallyLedger; inserted: boolean }> {
     const ledgers = manager.getRepository(TallyLedger);
-    const sourceKey = this.sourceKey(input, 'ledger');
+    const ledgerGuid = input.guid.trim();
+    // Ledger source keys are always the stable Tally identity. Never accept a
+    // name-derived source key here: it would create a second row for the same
+    // Tally ledger and could overwrite a correct closing balance with zero.
+    const sourceKey = ledgerGuid;
+    const normalizedLedgerName = this.normalizedKey(input.name);
     let ledger = await ledgers.findOneBy({ tallyCompanyName: companyName, sourceKey });
+    if (!ledger) {
+      ledger = await ledgers.findOneBy({
+        tallyCompanyName: companyName,
+        tallyLedgerGuid: ledgerGuid,
+      });
+    }
+    if (!ledger) {
+      // One-time compatibility path for a row produced by the old
+      // `ledger:<name>` fallback. Reuse its id so imported invoices and
+      // receipts remain linked when it is upgraded to the stable identity.
+      ledger = await ledgers.findOneBy({
+        tallyCompanyName: companyName,
+        normalizedLedgerName,
+        tallyLedgerGuid: IsNull(),
+      });
+    }
     const inserted = !ledger;
     if (!ledger) {
       ledger = ledgers.create({ tallyCompanyName: companyName, sourceKey });
     }
-    ledger.tallyLedgerGuid = input.guid?.trim() || null;
+    ledger.sourceKey = sourceKey;
+    ledger.tallyLedgerGuid = ledgerGuid;
     ledger.tallyLedgerName = input.name.trim();
-    ledger.normalizedLedgerName = this.normalizedKey(input.name);
+    ledger.normalizedLedgerName = normalizedLedgerName;
     ledger.parentGroup = input.parent?.trim() || null;
     ledger.phone = input.phone?.trim() || null;
     ledger.gstin = input.gstin?.trim() || null;
@@ -608,6 +621,16 @@ export class TallyConnectorService {
     input: { sourceKey?: string; guid?: string; voucherNumber?: string; voucherDate?: string; name?: string },
     kind: string,
   ): string {
+    if (kind === 'ledger') {
+      const stableLedgerIdentity = input.guid?.trim();
+      if (!stableLedgerIdentity) {
+        throw new Error(
+          'A Tally ledger requires GUID, REMOTEID, or MASTERID; name-only identities are not accepted.',
+        );
+      }
+      return stableLedgerIdentity;
+    }
+
     const supplied = input.sourceKey?.trim();
     if (supplied) return supplied;
     const stable = [

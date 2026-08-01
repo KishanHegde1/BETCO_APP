@@ -1,4 +1,5 @@
 export * from './category.entity';
+export * from './cash-declaration.entity';
 export * from './daily-stock.entity';
 export * from './dealer-invoice-item.entity';
 export * from './dealer-invoice.entity';

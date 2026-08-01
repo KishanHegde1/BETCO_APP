@@ -29,6 +29,22 @@ describe('TallyConnectorService read-only identity handling', () => {
     );
   });
 
+  it('does not permit a name-only fallback as a ledger identity', () => {
+    const helper = service as unknown as {
+      sourceKey: (
+        input: { guid: string; voucherNumber?: string; voucherDate?: string; name?: string },
+        kind: string,
+      ) => string;
+    };
+
+    expect(
+      helper.sourceKey(
+        { guid: 'stable-ledger-id', name: 'S.D.M. Energy System' },
+        'ledger',
+      ),
+    ).toBe('stable-ledger-id');
+  });
+
   it('does not auto-map a new ledger to a dealer during sync', async () => {
     const resolver = service as unknown as {
       resolveLedgerMapping: (
@@ -54,6 +70,28 @@ describe('TallyConnectorService read-only identity handling', () => {
           openingBalance: 0,
           closingBalance: 0,
         },
+        new Map(),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('never fabricates a zero-balance ledger from an unmapped voucher', async () => {
+    const resolver = service as unknown as {
+      resolveVoucherMapping: (
+        manager: unknown,
+        company: string,
+        voucher: { partyLedgerName: string; partyLedgerGuid?: string },
+        mappings: Map<string, unknown>,
+        mappingCache: Map<string, unknown>,
+      ) => Promise<unknown>;
+    };
+
+    await expect(
+      resolver.resolveVoucherMapping(
+        {},
+        'BETCO AQUA TRADERS',
+        { partyLedgerName: 'S.D.M. Energy System' },
+        new Map(),
         new Map(),
       ),
     ).resolves.toBeUndefined();

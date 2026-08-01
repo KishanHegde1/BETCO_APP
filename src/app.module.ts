@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
 import { AuthModule } from './auth/auth.module';
+import { CashDeclarationsModule } from './cash-declarations/cash-declarations.module';
 import { AdminModule } from './admin/admin.module';
 import { BillingModule } from './billing/billing.module';
 import { CategoriesModule } from './categories/categories.module';
@@ -38,6 +39,7 @@ import { UsersModule } from './users/users.module';
     LoggerModule,
     DatabaseModule,
     AuthModule,
+    CashDeclarationsModule,
     AdminModule,
     UsersModule,
     DealersModule,
