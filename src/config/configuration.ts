@@ -26,6 +26,7 @@ export interface ApplicationConfiguration {
     apiKey?: string;
     apiSecret?: string;
     folder: string;
+    cashProofFolder: string;
   };
 }
 
@@ -71,6 +72,8 @@ export default (): ApplicationConfiguration => {
       apiSecret: process.env.CLOUDINARY_API_SECRET,
       folder:
         process.env.CLOUDINARY_SOLAR_PROJECTS_FOLDER ?? 'betco/solar-projects',
+      cashProofFolder:
+        process.env.CLOUDINARY_CASH_PROOFS_FOLDER ?? 'betco/cash-proofs',
     },
   };
 };

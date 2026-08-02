@@ -20,9 +20,14 @@ describe('CashDeclarationsService', () => {
     },
   };
   const dealers = { findOne: jest.fn() };
+  const cloudinary = {
+    uploadCashDeclarationProof: jest.fn(),
+    removeCashDeclarationProof: jest.fn(),
+  };
   const service = new CashDeclarationsService(
     declarations as never,
     dealers as never,
+    cloudinary as never,
   );
 
   beforeEach(() => {
@@ -37,7 +42,11 @@ describe('CashDeclarationsService', () => {
         work(transactionManager),
     );
     transactionManager.save.mockImplementation(async (record) => record);
-    dealers.findOne.mockResolvedValue({ id: 'dealer-1', userId: 'dealer-user' });
+    dealers.findOne.mockResolvedValue({
+      id: 'dealer-1',
+      userId: 'dealer-user',
+    });
+    cloudinary.removeCashDeclarationProof.mockResolvedValue(undefined);
   });
 
   it('creates an internal acknowledgement without using any Tally dependency', async () => {
@@ -79,15 +88,50 @@ describe('CashDeclarationsService', () => {
     expect(transactionManager.save).toHaveBeenCalledWith(declaration);
   });
 
+  it('stores an optional proof only as a Cloudinary URL and expires it after one year', async () => {
+    cloudinary.uploadCashDeclarationProof.mockResolvedValue({
+      secureUrl:
+        'https://res.cloudinary.com/betco/image/upload/cash-proof.webp',
+      publicId: 'betco/cash-proofs/proof-1',
+    });
+
+    await service.createForDealer(
+      'dealer-user',
+      { amount: '5000.00' },
+      {
+        originalname: 'receipt.png',
+        mimetype: 'image/png',
+        size: 20,
+        buffer: Buffer.from('proof'),
+      },
+    );
+
+    expect(cloudinary.uploadCashDeclarationProof).toHaveBeenCalledWith(
+      Buffer.from('proof'),
+    );
+    expect(declarations.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paymentProofUrl:
+          'https://res.cloudinary.com/betco/image/upload/cash-proof.webp',
+        paymentProofPublicId: 'betco/cash-proofs/proof-1',
+        paymentProofExpiresAt: expect.any(Date),
+      }),
+    );
+    const created = declarations.create.mock.calls.at(-1)?.[0]
+      .paymentProofExpiresAt as Date;
+    expect(created.getTime()).toBeGreaterThan(Date.now() + 364 * 86400000);
+    expect(created.getTime()).toBeLessThan(Date.now() + 367 * 86400000);
+  });
+
   it('does not allow the same record to be marked received twice', async () => {
     transactionManager.findOne.mockResolvedValue({
       id: 'cash-1',
       status: CashDeclarationStatus.RECEIVED,
     });
 
-    await expect(service.markReceived('cash-1', 'admin-user-1')).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      service.markReceived('cash-1', 'admin-user-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('rejects a cash acknowledgement for an account without a dealer profile', async () => {

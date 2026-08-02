@@ -35,6 +35,24 @@ export class CashDeclaration extends BaseEntity {
   @Column({ type: 'varchar', length: 500, nullable: true })
   note?: string | null;
 
+  /**
+   * Optional payment/cash proof stored in Cloudinary, never in NeonDB or
+   * Tally. The retention service removes the asset after one year.
+   */
+  @Column({ name: 'payment_proof_url', type: 'text', nullable: true })
+  paymentProofUrl?: string | null;
+
+  @Column({ name: 'payment_proof_public_id', type: 'varchar', nullable: true })
+  paymentProofPublicId?: string | null;
+
+  @Index('cash_declarations_payment_proof_expiry_index')
+  @Column({
+    name: 'payment_proof_expires_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  paymentProofExpiresAt?: Date | null;
+
   @Column({
     type: 'varchar',
     length: 20,

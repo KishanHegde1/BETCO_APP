@@ -80,6 +80,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   CLOUDINARY_SOLAR_PROJECTS_FOLDER?: string;
+
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_CASH_PROOFS_FOLDER?: string;
 }
 
 export function validateEnvironment(

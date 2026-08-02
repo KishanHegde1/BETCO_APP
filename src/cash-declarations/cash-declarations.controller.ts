@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -8,9 +9,17 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { UserRole } from '../common/constants/user-role.enum';
@@ -21,23 +30,56 @@ import { CashDeclarationQueryDto } from './dto/cash-declaration-query.dto';
 import { CreateCashDeclarationDto } from './dto/create-cash-declaration.dto';
 import { CashDeclarationsService } from './cash-declarations.service';
 
+const proofUploadInterceptor = FileInterceptor('paymentProof', {
+  limits: { files: 1, fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_, file, callback) => {
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+      callback(null, true);
+      return;
+    }
+    callback(
+      new BadRequestException(
+        'Payment proof must be a JPG, PNG, or WebP image.',
+      ),
+      false,
+    );
+  },
+});
+
+interface UploadedCashProofFile {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+}
+
 @ApiBearerAuth()
 @ApiTags('Cash acknowledgements')
 @Controller({ path: 'cash-declarations', version: '1' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class CashDeclarationsController {
-  constructor(private readonly cashDeclarationsService: CashDeclarationsService) {}
+  constructor(
+    private readonly cashDeclarationsService: CashDeclarationsService,
+  ) {}
 
   @Post()
   @Roles(UserRole.USER)
+  @UseInterceptors(proofUploadInterceptor)
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({
-    summary: 'Record cash given to Betco without creating a Tally entry',
+    summary:
+      'Record cash given to Betco with an optional proof screenshot, without creating a Tally entry',
   })
   create(
     @Req() request: { user: JwtPayload },
     @Body() dto: CreateCashDeclarationDto,
+    @UploadedFile() paymentProof: UploadedCashProofFile | undefined,
   ) {
-    return this.cashDeclarationsService.createForDealer(request.user.sub, dto);
+    return this.cashDeclarationsService.createForDealer(
+      request.user.sub,
+      dto,
+      paymentProof,
+    );
   }
 
   @Get('my')
@@ -54,7 +96,9 @@ export class CashDeclarationsController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class AdminCashDeclarationsController {
-  constructor(private readonly cashDeclarationsService: CashDeclarationsService) {}
+  constructor(
+    private readonly cashDeclarationsService: CashDeclarationsService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'View internal dealer cash acknowledgements' })
@@ -80,7 +124,9 @@ export class AdminCashDeclarationsController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.STAFF)
 export class StaffCashDeclarationsController {
-  constructor(private readonly cashDeclarationsService: CashDeclarationsService) {}
+  constructor(
+    private readonly cashDeclarationsService: CashDeclarationsService,
+  ) {}
 
   @Get()
   @ApiOperation({ summary: 'View internal dealer cash acknowledgements' })

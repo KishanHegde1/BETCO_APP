@@ -17,6 +17,11 @@ export interface CloudinaryMediaUpload {
   mediaType: SolarProjectMediaType;
 }
 
+export interface CloudinaryImageUpload {
+  secureUrl: string;
+  publicId: string;
+}
+
 @Injectable()
 export class CloudinaryService {
   constructor(
@@ -115,6 +120,52 @@ export class CloudinaryService {
     });
   }
 
+  /** Streams a cash/payment proof to Cloudinary without writing a local file. */
+  async uploadCashDeclarationProof(
+    buffer: Buffer,
+  ): Promise<CloudinaryImageUpload> {
+    const folder = this.requireCashProofFolder();
+    const result = await new Promise<{ secure_url: string; public_id: string }>(
+      (resolve, reject) => {
+        const stream = this.cloudinary.uploader.upload_stream(
+          {
+            folder,
+            resource_type: 'image',
+            transformation: [
+              {
+                width: 1600,
+                crop: 'limit',
+                quality: 'auto:good',
+                fetch_format: 'webp',
+              },
+            ],
+          },
+          (error, upload) => {
+            if (error || !upload?.secure_url || !upload.public_id) {
+              reject(
+                error instanceof Error
+                  ? error
+                  : new Error('Cloudinary did not return a proof URL.'),
+              );
+              return;
+            }
+            resolve(upload);
+          },
+        );
+        stream.end(buffer);
+      },
+    );
+    return { secureUrl: result.secure_url, publicId: result.public_id };
+  }
+
+  async removeCashDeclarationProof(publicId: string): Promise<void> {
+    if (!this.isConfigured()) return;
+    await this.cloudinary.uploader.destroy(publicId, {
+      resource_type: 'image',
+      invalidate: true,
+    });
+  }
+
   private deriveThumbnail(
     secureUrl: string,
     mediaType: SolarProjectMediaType,
@@ -133,6 +184,15 @@ export class CloudinaryService {
       );
     }
     return this.cloudinaryConfig()?.folder.trim() ?? '';
+  }
+
+  private requireCashProofFolder(): string {
+    if (!this.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'Cloudinary is not configured for cash proof uploads.',
+      );
+    }
+    return this.cloudinaryConfig()?.cashProofFolder.trim() ?? '';
   }
 
   private isConfigured(): boolean {
