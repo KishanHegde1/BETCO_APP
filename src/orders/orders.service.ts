@@ -274,6 +274,12 @@ export class OrdersService {
         description: 'The dealer submitted this order.',
         performedBy: userId,
       });
+      await this.notifyAdministrators(manager, {
+        orderId: order.id,
+        type: NotificationType.ORDER_PLACED,
+        title: 'New Order Placed',
+        body: `${dealer.shopName ?? dealer.businessName} placed an order awaiting approval.`,
+      });
 
       return {
         id: order.id,
@@ -402,6 +408,12 @@ export class OrdersService {
         },
         manager,
       );
+      await this.notifyAdministrators(manager, {
+        orderId: order.id,
+        type: NotificationType.ORDER_PLACED,
+        title: 'New Order Recorded',
+        body: `${dealer.shopName ?? dealer.businessName} has an order recorded by ${staff.username} awaiting approval.`,
+      });
 
       return {
         id: order.id,
@@ -433,7 +445,9 @@ export class OrdersService {
     });
   }
 
-  findDealersForStaffOrder(search?: string): Promise<StaffOrderDealerResponse[]> {
+  findDealersForStaffOrder(
+    search?: string,
+  ): Promise<StaffOrderDealerResponse[]> {
     return this.dealersRepository.findForStaffOrder(search);
   }
 

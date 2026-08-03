@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Dealer } from '../entities/dealer.entity';
-import { Order, OrderStatus } from '../entities/order.entity';
+import { DeliveryStatus, Order, OrderStatus } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
 import { Product } from '../entities/product.entity';
 import { User } from '../entities/user.entity';
@@ -27,7 +27,7 @@ describe('OrdersService', () => {
     create: jest.fn(),
     save: jest.fn(),
   };
-  const userRepository = { findOneBy: jest.fn() };
+  const userRepository = { findOneBy: jest.fn(), find: jest.fn() };
   const productRepository = { findOneBy: jest.fn() };
   const stockRepository = {
     findOne: jest.fn(),
@@ -82,6 +82,7 @@ describe('OrdersService', () => {
       id: 'dealer-user-1',
       isActive: true,
     });
+    userRepository.find.mockResolvedValue([]);
     notificationsService.create.mockResolvedValue({ id: 'notification-1' });
     productRepository.findOneBy.mockResolvedValue({
       id: 'product-1',
@@ -185,6 +186,35 @@ describe('OrdersService', () => {
       expect.objectContaining({
         userId: 'dealer-user-1',
         title: 'Order recorded',
+      }),
+      manager,
+    );
+  });
+
+  it('notifies every active administrator when staff records a dealer order', async () => {
+    userRepository.find.mockResolvedValue([
+      { id: 'admin-user-1' },
+      { id: 'admin-user-2' },
+    ]);
+
+    await service.createForStaff('staff-user-1', {
+      dealerId: 'dealer-1',
+      items: [{ productId: 'product-1', quantity: 2 }],
+    });
+
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'admin-user-1',
+        type: NotificationType.ORDER_PLACED,
+        title: 'New Order Recorded',
+      }),
+      manager,
+    );
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'admin-user-2',
+        type: NotificationType.ORDER_PLACED,
+        title: 'New Order Recorded',
       }),
       manager,
     );
@@ -644,5 +674,79 @@ describe('OrdersService', () => {
 
     expect(orderRepository.save).not.toHaveBeenCalled();
     expect(notificationsService.create).not.toHaveBeenCalled();
+  });
+
+  it('lets staff mark a billed order shipped without changing stock', async () => {
+    const order = {
+      id: 'order-1',
+      dealerId: 'dealer-1',
+      status: OrderStatus.BILLED,
+      billGenerated: true,
+      deliveryStatus: DeliveryStatus.READY_FOR_DISPATCH,
+    };
+    findOrder.mockResolvedValue(order);
+
+    await expect(
+      service.markShipped('order-1', 'staff-user-1'),
+    ).resolves.toMatchObject({
+      id: 'order-1',
+      deliveryStatus: DeliveryStatus.SHIPPED,
+      shippedBy: 'staff-user-1',
+    });
+
+    expect(order).toMatchObject({
+      status: OrderStatus.BILLED,
+      deliveryStatus: DeliveryStatus.SHIPPED,
+      shippedBy: 'staff-user-1',
+    });
+    expect(stockRepository.save).not.toHaveBeenCalled();
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'dealer-user-1',
+        type: NotificationType.ORDER_SHIPPED,
+      }),
+      manager,
+    );
+  });
+
+  it('records dealer receipt and notifies administrators without changing stock', async () => {
+    const order = {
+      id: 'order-1',
+      dealerId: 'dealer-1',
+      status: OrderStatus.BILLED,
+      billGenerated: true,
+      deliveryStatus: DeliveryStatus.SHIPPED,
+    };
+    dealersRepository.findByUserId.mockResolvedValue({
+      id: 'dealer-1',
+      userId: 'dealer-user-1',
+      businessName: 'Example Electricals',
+      shopName: 'Example Electricals',
+    });
+    userRepository.find.mockResolvedValue([{ id: 'admin-user-1' }]);
+    findOrder.mockResolvedValue(order);
+
+    await expect(
+      service.confirmReceived('order-1', 'dealer-user-1'),
+    ).resolves.toMatchObject({
+      id: 'order-1',
+      deliveryStatus: DeliveryStatus.RECEIVED,
+      receivedBy: 'dealer-user-1',
+    });
+
+    expect(order).toMatchObject({
+      status: OrderStatus.BILLED,
+      deliveryStatus: DeliveryStatus.RECEIVED,
+      receivedBy: 'dealer-user-1',
+    });
+    expect(stockRepository.save).not.toHaveBeenCalled();
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'admin-user-1',
+        type: NotificationType.ORDER_RECEIVED,
+        title: 'Order Received',
+      }),
+      manager,
+    );
   });
 });

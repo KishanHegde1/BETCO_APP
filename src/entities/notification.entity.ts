@@ -3,6 +3,7 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from './base.entity';
 
 export enum NotificationType {
+  ORDER_PLACED = 'ORDER_PLACED',
   ORDER_APPROVED = 'ORDER_APPROVED',
   ORDER_CANCELLED = 'ORDER_CANCELLED',
   ORDER_UPDATED = 'ORDER_UPDATED',
