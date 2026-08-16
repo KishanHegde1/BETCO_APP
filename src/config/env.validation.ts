@@ -25,6 +25,10 @@ class EnvironmentVariables {
   @IsIn(['true', 'false'])
   DATABASE_SSL?: string;
 
+  @IsOptional()
+  @IsIn(['true', 'false'])
+  DATABASE_SSL_REJECT_UNAUTHORIZED?: string;
+
   @ValidateIf(
     (environment: EnvironmentVariables) => environment.NODE_ENV !== 'test',
   )
@@ -84,6 +88,10 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   CLOUDINARY_CASH_PROOFS_FOLDER?: string;
+
+  @IsOptional()
+  @IsString()
+  CLOUDINARY_PM_SURYA_GHAR_DOCUMENTS_FOLDER?: string;
 }
 
 export function validateEnvironment(

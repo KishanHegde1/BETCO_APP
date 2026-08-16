@@ -4,6 +4,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'node:crypto';
 
 import { SolarProjectMediaType } from '../entities/solar-project-media.entity';
 import { ApplicationConfiguration } from '../config/configuration';
@@ -20,6 +21,17 @@ export interface CloudinaryMediaUpload {
 export interface CloudinaryImageUpload {
   secureUrl: string;
   publicId: string;
+}
+
+export interface CloudinaryPrivatePdfUpload {
+  publicId: string;
+  format: string;
+  bytes: number;
+}
+
+export interface CloudinaryPrivateDownload {
+  url: string;
+  expiresAt: Date;
 }
 
 @Injectable()
@@ -166,6 +178,73 @@ export class CloudinaryService {
     });
   }
 
+  /** Stores a customer PDF as an authenticated raw asset with no public URL. */
+  async uploadPmSuryaGharPdf(
+    buffer: Buffer,
+  ): Promise<CloudinaryPrivatePdfUpload> {
+    const folder = this.requirePmSuryaGharDocumentsFolder();
+    const result = await new Promise<{
+      public_id: string;
+      bytes?: number;
+    }>((resolve, reject) => {
+      const stream = this.cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: 'raw',
+          type: 'authenticated',
+          // Cloudinary treats a raw asset's extension as part of its public ID.
+          // Keep the generated identifier opaque while making it deliverable as
+          // a PDF through private_download_url.
+          public_id: `${randomUUID()}.pdf`,
+          overwrite: false,
+          unique_filename: true,
+          use_filename: false,
+        },
+        (error, upload) => {
+          if (error || !upload?.public_id) {
+            reject(
+              error instanceof Error
+                ? error
+                : new Error('Cloudinary did not accept the private PDF.'),
+            );
+            return;
+          }
+          resolve(upload);
+        },
+      );
+      stream.end(buffer);
+    });
+    return {
+      publicId: result.public_id,
+      format: 'pdf',
+      bytes: result.bytes ?? buffer.length,
+    };
+  }
+
+  createPmSuryaGharPdfDownload(
+    publicId: string,
+    format: string,
+  ): CloudinaryPrivateDownload {
+    this.requirePmSuryaGharDocumentsFolder();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const url = this.cloudinary.utils.private_download_url(publicId, format, {
+      resource_type: 'raw',
+      type: 'authenticated',
+      expires_at: Math.floor(expiresAt.getTime() / 1000),
+      attachment: false,
+    });
+    return { url, expiresAt };
+  }
+
+  async removePmSuryaGharPdf(publicId: string): Promise<void> {
+    if (!this.isConfigured()) return;
+    await this.cloudinary.uploader.destroy(publicId, {
+      resource_type: 'raw',
+      type: 'authenticated',
+      invalidate: true,
+    });
+  }
+
   private deriveThumbnail(
     secureUrl: string,
     mediaType: SolarProjectMediaType,
@@ -193,6 +272,21 @@ export class CloudinaryService {
       );
     }
     return this.cloudinaryConfig()?.cashProofFolder.trim() ?? '';
+  }
+
+  private requirePmSuryaGharDocumentsFolder(): string {
+    if (!this.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'Cloudinary is not configured for PM Surya Ghar documents.',
+      );
+    }
+    const folder = this.cloudinaryConfig()?.pmSuryaGharDocumentsFolder.trim();
+    if (!folder) {
+      throw new ServiceUnavailableException(
+        'The PM Surya Ghar Cloudinary folder is not configured.',
+      );
+    }
+    return folder;
   }
 
   private isConfigured(): boolean {

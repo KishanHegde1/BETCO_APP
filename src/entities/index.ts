@@ -11,6 +11,8 @@ export * from './order-item.entity';
 export * from './order-activity.entity';
 export * from './order.entity';
 export * from './product.entity';
+export * from './pm-surya-ghar-application.entity';
+export * from './pm-surya-ghar-document.entity';
 export * from './solar-project-media.entity';
 export * from './solar-project.entity';
 export * from './user.entity';

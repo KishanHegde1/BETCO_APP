@@ -17,6 +17,8 @@ import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
         }
 
         const ssl = configService.get<boolean>('database.ssl') ?? false;
+        const sslRejectUnauthorized =
+          configService.get<boolean>('database.sslRejectUnauthorized') ?? true;
         return {
           type: 'postgres',
           url,
@@ -24,7 +26,7 @@ import { TypeOrmModule, TypeOrmModuleOptions } from '@nestjs/typeorm';
           synchronize: false,
           retryAttempts: 5,
           retryDelay: 3000,
-          ssl: ssl ? { rejectUnauthorized: false } : false,
+          ssl: ssl ? { rejectUnauthorized: sslRejectUnauthorized } : false,
           extra: { max: configService.get<number>('database.poolMax') ?? 10 },
         };
       },

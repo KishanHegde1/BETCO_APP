@@ -10,6 +10,7 @@ export interface ApplicationConfiguration {
   database: {
     url?: string;
     ssl: boolean;
+    sslRejectUnauthorized: boolean;
     poolMax: number;
   };
   jwt: {
@@ -27,6 +28,7 @@ export interface ApplicationConfiguration {
     apiSecret?: string;
     folder: string;
     cashProofFolder: string;
+    pmSuryaGharDocumentsFolder: string;
   };
 }
 
@@ -54,6 +56,8 @@ export default (): ApplicationConfiguration => {
           (process.env.DATABASE_URL?.includes('.neon.tech') ?? false)) ||
         ((process.env.NODE_ENV ?? 'development') === 'production' &&
           process.env.DATABASE_SSL !== 'false'),
+      sslRejectUnauthorized:
+        process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false',
       poolMax: 10,
     },
     jwt: {
@@ -74,6 +78,9 @@ export default (): ApplicationConfiguration => {
         process.env.CLOUDINARY_SOLAR_PROJECTS_FOLDER ?? 'betco/solar-projects',
       cashProofFolder:
         process.env.CLOUDINARY_CASH_PROOFS_FOLDER ?? 'betco/cash-proofs',
+      pmSuryaGharDocumentsFolder:
+        process.env.CLOUDINARY_PM_SURYA_GHAR_DOCUMENTS_FOLDER ??
+        'betco/pm-surya-ghar/documents',
     },
   };
 };
