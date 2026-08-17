@@ -78,6 +78,8 @@ export interface PmSuryaGharItemResponse {
 export interface PmSuryaGharApplicationResponse {
   id: string;
   createdBy: string;
+  isSharedWithStaff: boolean;
+  canManage: boolean;
   customerName: string;
   customerPhone: string;
   alternatePhone: string | null;
@@ -132,6 +134,7 @@ export class PmSuryaGharService {
     const currentActor = await this.requireCurrentActor(actor.sub);
     const application = this.applications.create({
       createdBy: currentActor.id,
+      staffVisible: currentActor.role === UserRole.ADMIN,
       customerName: this.requiredText(dto.customerName, 'Customer name'),
       customerPhone: this.requiredText(dto.customerPhone, 'Customer phone'),
       alternatePhone: this.optionalText(dto.alternatePhone),
@@ -154,23 +157,24 @@ export class PmSuryaGharService {
     const saved = await this.applications.save(application);
     saved.documents = [];
     saved.items = [];
-    return this.toApplicationResponse(saved);
+    return this.toApplicationResponse(saved, currentActor);
   }
 
   async findAll(actor: JwtPayload): Promise<PmSuryaGharApplicationResponse[]> {
     const currentActor = await this.requireCurrentActor(actor.sub);
     const builder = this.applications.createQueryBuilder('application');
     if (currentActor.role !== UserRole.ADMIN) {
-      builder.where('application.created_by = :createdBy', {
-        createdBy: currentActor.id,
-      });
+      builder.where(
+        '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
+        { createdBy: currentActor.id },
+      );
     }
     const applications = await builder
       .orderBy('application.updated_at', 'DESC')
       .getMany();
     await this.loadApplicationDetails(applications);
     return applications.map((application) =>
-      this.toApplicationResponse(application),
+      this.toApplicationResponse(application, currentActor),
     );
   }
 
@@ -181,6 +185,7 @@ export class PmSuryaGharService {
     const currentActor = await this.requireCurrentActor(actor.sub);
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(id, currentActor),
+      currentActor,
     );
   }
 
@@ -201,6 +206,7 @@ export class PmSuryaGharService {
     });
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(id, currentActor),
+      currentActor,
     );
   }
 
@@ -251,6 +257,7 @@ export class PmSuryaGharService {
     }
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(applicationId, currentActor),
+      currentActor,
     );
   }
 
@@ -285,6 +292,7 @@ export class PmSuryaGharService {
     }
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(applicationId, currentActor),
+      currentActor,
     );
   }
 
@@ -325,6 +333,7 @@ export class PmSuryaGharService {
     });
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(applicationId, currentActor),
+      currentActor,
     );
   }
 
@@ -335,10 +344,9 @@ export class PmSuryaGharService {
     file: UploadedPmSuryaGharPdf | undefined,
   ): Promise<PmSuryaGharDocumentResponse> {
     const currentActor = await this.requireCurrentActor(actor.sub);
-    const application = await this.requireAccessibleApplication(
+    const application = await this.requireManageableApplication(
       applicationId,
       currentActor,
-      false,
     );
     this.assertDraft(application);
     const validation = await this.validatePdf(file);
@@ -475,6 +483,7 @@ export class PmSuryaGharService {
     });
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(id, currentActor),
+      currentActor,
     );
   }
 
@@ -505,9 +514,10 @@ export class PmSuryaGharService {
       .createQueryBuilder('application')
       .where('application.id = :id', { id });
     if (actor.role !== UserRole.ADMIN) {
-      builder.andWhere('application.created_by = :createdBy', {
-        createdBy: actor.id,
-      });
+      builder.andWhere(
+        '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
+        { createdBy: actor.id },
+      );
     }
     const application = await builder.getOne();
     if (!application) {
@@ -515,6 +525,26 @@ export class PmSuryaGharService {
     }
     if (includeDetails) {
       await this.loadApplicationDetails([application]);
+    }
+    return application;
+  }
+
+  private async requireManageableApplication(
+    id: string,
+    actor: CurrentPmSuryaGharActor,
+  ): Promise<PmSuryaGharApplication> {
+    const builder = this.applications
+      .createQueryBuilder('application')
+      .where('application.id = :id', { id });
+    if (actor.role !== UserRole.ADMIN) {
+      builder.andWhere(
+        'application.created_by = :createdBy AND application.staff_visible = FALSE',
+        { createdBy: actor.id },
+      );
+    }
+    const application = await builder.getOne();
+    if (!application) {
+      throw new NotFoundException('PM Surya Ghar application not found.');
     }
     return application;
   }
@@ -554,7 +584,9 @@ export class PmSuryaGharService {
   ): Promise<PmSuryaGharApplication> {
     const application = await manager.findOne(PmSuryaGharApplication, {
       where:
-        actor.role === UserRole.ADMIN ? { id } : { id, createdBy: actor.id },
+        actor.role === UserRole.ADMIN
+          ? { id }
+          : { id, createdBy: actor.id, staffVisible: false },
       lock: { mode: 'pessimistic_write' },
     });
     if (!application) {
@@ -765,6 +797,7 @@ export class PmSuryaGharService {
 
   private toApplicationResponse(
     application: PmSuryaGharApplication,
+    actor: CurrentPmSuryaGharActor,
   ): PmSuryaGharApplicationResponse {
     const items = [...(application.items ?? [])]
       .sort(
@@ -776,6 +809,11 @@ export class PmSuryaGharService {
     return {
       id: application.id,
       createdBy: application.createdBy,
+      isSharedWithStaff: application.staffVisible === true,
+      canManage:
+        actor.role === UserRole.ADMIN ||
+        (application.createdBy === actor.id &&
+          application.staffVisible !== true),
       customerName: application.customerName,
       customerPhone: application.customerPhone,
       alternatePhone: application.alternatePhone ?? null,

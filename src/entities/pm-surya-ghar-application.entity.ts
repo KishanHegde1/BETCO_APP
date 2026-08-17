@@ -16,6 +16,9 @@ export class PmSuryaGharApplication extends BaseEntity {
   @Column({ name: 'created_by', type: 'uuid' })
   createdBy!: string;
 
+  @Column({ name: 'staff_visible', type: 'boolean', default: false })
+  staffVisible!: boolean;
+
   @Column({ name: 'customer_name', type: 'varchar', length: 255 })
   customerName!: string;
 

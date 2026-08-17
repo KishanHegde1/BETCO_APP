@@ -23,10 +23,18 @@ describe('PmSuryaGharService', () => {
     username: 'staff_member',
     role: UserRole.STAFF,
   };
+  const admin: JwtPayload = {
+    sub: 'admin-1',
+    username: 'administrator',
+    role: UserRole.ADMIN,
+  };
   const now = new Date('2026-08-16T08:00:00.000Z');
-  const application = (): PmSuryaGharApplication => ({
+  const application = (
+    overrides: Partial<PmSuryaGharApplication> = {},
+  ): PmSuryaGharApplication => ({
     id: 'application-1',
     createdBy: staff.sub,
+    staffVisible: false,
     customerName: 'Anil Kumar',
     customerPhone: '9876543210',
     alternatePhone: null,
@@ -47,6 +55,7 @@ describe('PmSuryaGharService', () => {
     updatedAt: now,
     documents: [],
     items: [],
+    ...overrides,
   });
 
   const suppliedItem = (
@@ -225,6 +234,7 @@ describe('PmSuryaGharService', () => {
     expect(applications.create).toHaveBeenCalledWith(
       expect.objectContaining({
         createdBy: staff.sub,
+        staffVisible: false,
         customerName: 'Anil Kumar',
         status: PmSuryaGharApplicationStatus.DRAFT,
       }),
@@ -232,6 +242,8 @@ describe('PmSuryaGharService', () => {
     expect(created).toMatchObject({
       id: 'application-1',
       createdBy: staff.sub,
+      isSharedWithStaff: false,
+      canManage: true,
       status: PmSuryaGharApplicationStatus.DRAFT,
       documents: [],
       items: [],
@@ -239,18 +251,66 @@ describe('PmSuryaGharService', () => {
     });
   });
 
-  it('always scopes a STAFF list query to the authenticated owner', async () => {
-    queryBuilder.getMany.mockResolvedValue([application()]);
+  it('lists a STAFF member own records and staff-visible ADMIN records only', async () => {
+    const own = application();
+    const sharedAdmin = application({
+      id: 'admin-application',
+      createdBy: admin.sub,
+      staffVisible: true,
+    });
+    queryBuilder.getMany.mockResolvedValue([own, sharedAdmin]);
 
-    await service.findAll(staff);
+    const result = await service.findAll(staff);
 
     expect(queryBuilder.where).toHaveBeenCalledWith(
-      'application.created_by = :createdBy',
+      '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
       { createdBy: staff.sub },
     );
     expect(queryBuilder.leftJoinAndSelect).not.toHaveBeenCalled();
     expect(documents.find).toHaveBeenCalledTimes(1);
     expect(items.find).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: own.id,
+        isSharedWithStaff: false,
+        canManage: true,
+      }),
+      expect.objectContaining({
+        id: sharedAdmin.id,
+        isSharedWithStaff: true,
+        canManage: false,
+      }),
+    ]);
+  });
+
+  it('marks an ADMIN-created draft visible to staff', async () => {
+    users.findOne.mockResolvedValueOnce({
+      id: admin.sub,
+      role: UserRole.ADMIN,
+      isActive: true,
+    });
+
+    const created = await service.create(admin, {
+      customerName: 'Admin customer',
+      customerPhone: '9876543210',
+      addressLine1: '1 Main Road',
+      city: 'Bengaluru',
+      district: 'Bengaluru Urban',
+      state: 'Karnataka',
+      pincode: '560001',
+    });
+
+    expect(applications.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdBy: admin.sub,
+        staffVisible: true,
+      }),
+    );
+    expect(created).toMatchObject({
+      createdBy: admin.sub,
+      isSharedWithStaff: true,
+      canManage: true,
+    });
   });
 
   it('allows an ADMIN to list all applications without an owner predicate', async () => {
@@ -261,9 +321,202 @@ describe('PmSuryaGharService', () => {
       isActive: true,
     });
 
-    await service.findAll({ ...staff, sub: 'admin-1', role: UserRole.ADMIN });
+    await service.findAll(admin);
 
     expect(queryBuilder.where).not.toHaveBeenCalled();
+  });
+
+  it('lets STAFF read full shared ADMIN details and reports them read-only', async () => {
+    const sharedAdmin = application({
+      id: 'admin-application',
+      createdBy: admin.sub,
+      staffVisible: true,
+      documents: [],
+      items: [],
+    });
+    queryBuilder.getOne.mockResolvedValue(sharedAdmin);
+
+    const result = await service.findOne(sharedAdmin.id, staff);
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
+      { createdBy: staff.sub },
+    );
+    expect(documents.find).toHaveBeenCalledTimes(1);
+    expect(items.find).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      id: sharedAdmin.id,
+      isSharedWithStaff: true,
+      canManage: false,
+    });
+  });
+
+  it('does not expose another STAFF member private application or details', async () => {
+    queryBuilder.getOne.mockResolvedValue(null);
+
+    await expect(
+      service.findOne('other-staff-application', staff),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
+      { createdBy: staff.sub },
+    );
+    expect(documents.find).not.toHaveBeenCalled();
+    expect(items.find).not.toHaveBeenCalled();
+  });
+
+  it('lets STAFF generate a secure download for a shared ADMIN document', async () => {
+    const sharedAdmin = application({
+      id: 'admin-application',
+      createdBy: admin.sub,
+      staffVisible: true,
+    });
+    queryBuilder.getOne.mockResolvedValue(sharedAdmin);
+    documents.findOne.mockResolvedValue({
+      id: 'document-1',
+      applicationId: sharedAdmin.id,
+      storagePublicId: 'betco/pm-surya-ghar/documents/shared.pdf',
+      storageFormat: 'pdf',
+    });
+    const download = {
+      url: 'https://example.test/signed.pdf',
+      expiresAt: new Date('2026-08-16T08:05:00.000Z'),
+    };
+    cloudinary.createPmSuryaGharPdfDownload.mockReturnValue(download);
+
+    await expect(
+      service.createDownloadUrl(sharedAdmin.id, 'document-1', staff),
+    ).resolves.toEqual(download);
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      '(application.created_by = :createdBy OR application.staff_visible = TRUE)',
+      { createdBy: staff.sub },
+    );
+  });
+
+  it('keeps every shared ADMIN application mutation owner-only for STAFF', async () => {
+    const sharedAdmin = application({
+      id: 'admin-application',
+      createdBy: admin.sub,
+      staffVisible: true,
+    });
+    transactionManager.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.update(sharedAdmin.id, staff, { notes: 'Not allowed' }),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+    await expect(
+      service.createItem(sharedAdmin.id, staff, {
+        itemName: 'Inverter',
+        unit: PmSuryaGharItemUnit.PIECE,
+        quantity: 1,
+        unitPrice: 100,
+      }),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+    await expect(
+      service.updateItem(sharedAdmin.id, 'item-1', staff, {
+        itemName: 'Changed',
+      }),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+    await expect(
+      service.removeItem(sharedAdmin.id, 'item-1', staff),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+    await expect(service.submit(sharedAdmin.id, staff)).rejects.toThrow(
+      'PM Surya Ghar application not found.',
+    );
+
+    expect(transactionManager.findOne).toHaveBeenCalledWith(
+      PmSuryaGharApplication,
+      expect.objectContaining({
+        where: {
+          id: sharedAdmin.id,
+          createdBy: staff.sub,
+          staffVisible: false,
+        },
+      }),
+    );
+    expect(itemRepository.save).not.toHaveBeenCalled();
+    expect(itemRepository.remove).not.toHaveBeenCalled();
+    expect(transactionManager.count).not.toHaveBeenCalled();
+  });
+
+  it('rejects a shared upload before PDF validation or Cloudinary side effects', async () => {
+    queryBuilder.getOne.mockResolvedValue(null);
+
+    await expect(
+      service.uploadDocument(
+        'admin-application',
+        staff,
+        {
+          documentType: PmSuryaGharDocumentType.OTHER,
+          title: 'Not allowed',
+          pageCount: 1,
+        },
+        undefined,
+      ),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'application.created_by = :createdBy AND application.staff_visible = FALSE',
+      { createdBy: staff.sub },
+    );
+    expect(cloudinary.uploadPmSuryaGharPdf).not.toHaveBeenCalled();
+  });
+
+  it('allows an ADMIN to mutate a shared draft regardless of ownership', async () => {
+    const sharedAdmin = application({
+      id: 'admin-application',
+      createdBy: 'another-admin',
+      staffVisible: true,
+    });
+    users.findOne.mockResolvedValueOnce({
+      id: admin.sub,
+      role: UserRole.ADMIN,
+      isActive: true,
+    });
+    transactionManager.findOne.mockResolvedValue(sharedAdmin);
+    queryBuilder.getOne.mockResolvedValue(sharedAdmin);
+
+    const result = await service.update(sharedAdmin.id, admin, {
+      notes: 'Administrator update',
+    });
+
+    expect(transactionManager.findOne).toHaveBeenCalledWith(
+      PmSuryaGharApplication,
+      expect.objectContaining({ where: { id: sharedAdmin.id } }),
+    );
+    expect(sharedAdmin.notes).toBe('Administrator update');
+    expect(result).toMatchObject({ canManage: true, isSharedWithStaff: true });
+  });
+
+  it('keeps an ADMIN-created record read-only if its creator later becomes STAFF', async () => {
+    const formerAdminRecord = application({
+      id: 'former-admin-application',
+      createdBy: staff.sub,
+      staffVisible: true,
+    });
+    queryBuilder.getOne.mockResolvedValue(formerAdminRecord);
+
+    const readable = await service.findOne(formerAdminRecord.id, staff);
+    expect(readable).toMatchObject({
+      isSharedWithStaff: true,
+      canManage: false,
+    });
+
+    transactionManager.findOne.mockResolvedValue(null);
+    await expect(
+      service.update(formerAdminRecord.id, staff, { notes: 'Not allowed' }),
+    ).rejects.toThrow('PM Surya Ghar application not found.');
+    expect(transactionManager.findOne).toHaveBeenLastCalledWith(
+      PmSuryaGharApplication,
+      expect.objectContaining({
+        where: {
+          id: formerAdminRecord.id,
+          createdBy: staff.sub,
+          staffVisible: false,
+        },
+      }),
+    );
   });
 
   it('decodes the PDF, verifies the real page count, and returns no storage key', async () => {
@@ -363,7 +616,7 @@ describe('PmSuryaGharService', () => {
     expect(transactionManager.findOne).toHaveBeenCalledWith(
       PmSuryaGharApplication,
       expect.objectContaining({
-        where: { id: draft.id, createdBy: staff.sub },
+        where: { id: draft.id, createdBy: staff.sub, staffVisible: false },
         lock: { mode: 'pessimistic_write' },
       }),
     );

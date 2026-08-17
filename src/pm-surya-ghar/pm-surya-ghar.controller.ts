@@ -77,7 +77,7 @@ export class PmSuryaGharController {
   @Get()
   @ApiOperation({
     summary:
-      'List owned PM Surya Ghar applications, or all for an administrator',
+      'List owned and staff-visible PM Surya Ghar applications, or all for an administrator',
   })
   findAll(@Req() request: { user: JwtPayload }) {
     return this.pmSuryaGharService.findAll(request.user);
@@ -93,7 +93,7 @@ export class PmSuryaGharController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update an accessible PM Surya Ghar draft' })
+  @ApiOperation({ summary: 'Update a manageable PM Surya Ghar draft' })
   update(
     @Req() request: { user: JwtPayload },
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -103,7 +103,7 @@ export class PmSuryaGharController {
   }
 
   @Post(':id/items')
-  @ApiOperation({ summary: 'Add an item to an accessible application draft' })
+  @ApiOperation({ summary: 'Add an item to a manageable application draft' })
   createItem(
     @Req() request: { user: JwtPayload },
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -114,7 +114,7 @@ export class PmSuryaGharController {
 
   @Patch(':id/items/:itemId')
   @ApiOperation({
-    summary: 'Update an item in an accessible application draft',
+    summary: 'Update an item in a manageable application draft',
   })
   updateItem(
     @Req() request: { user: JwtPayload },
@@ -127,7 +127,7 @@ export class PmSuryaGharController {
 
   @Delete(':id/items/:itemId')
   @ApiOperation({
-    summary: 'Remove an item from an accessible application draft',
+    summary: 'Remove an item from a manageable application draft',
   })
   removeItem(
     @Req() request: { user: JwtPayload },
