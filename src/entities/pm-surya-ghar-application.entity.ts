@@ -2,6 +2,7 @@ import { Column, Entity, Index, OneToMany } from 'typeorm';
 
 import { BaseEntity } from './base.entity';
 import { PmSuryaGharDocument } from './pm-surya-ghar-document.entity';
+import { PmSuryaGharItem } from './pm-surya-ghar-item.entity';
 
 export enum PmSuryaGharApplicationStatus {
   DRAFT = 'DRAFT',
@@ -97,4 +98,7 @@ export class PmSuryaGharApplication extends BaseEntity {
 
   @OneToMany(() => PmSuryaGharDocument, (document) => document.application)
   documents!: PmSuryaGharDocument[];
+
+  @OneToMany(() => PmSuryaGharItem, (item) => item.application)
+  items!: PmSuryaGharItem[];
 }

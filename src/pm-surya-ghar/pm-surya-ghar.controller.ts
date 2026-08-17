@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -29,7 +30,9 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PmSuryaGharDocumentType } from '../entities/pm-surya-ghar-document.entity';
 import { CreatePmSuryaGharApplicationDto } from './dto/create-pm-surya-ghar-application.dto';
+import { CreatePmSuryaGharItemDto } from './dto/create-pm-surya-ghar-item.dto';
 import { UpdatePmSuryaGharApplicationDto } from './dto/update-pm-surya-ghar-application.dto';
+import { UpdatePmSuryaGharItemDto } from './dto/update-pm-surya-ghar-item.dto';
 import { UploadPmSuryaGharDocumentDto } from './dto/upload-pm-surya-ghar-document.dto';
 import {
   PmSuryaGharService,
@@ -97,6 +100,41 @@ export class PmSuryaGharController {
     @Body() dto: UpdatePmSuryaGharApplicationDto,
   ) {
     return this.pmSuryaGharService.update(id, request.user, dto);
+  }
+
+  @Post(':id/items')
+  @ApiOperation({ summary: 'Add an item to an accessible application draft' })
+  createItem(
+    @Req() request: { user: JwtPayload },
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreatePmSuryaGharItemDto,
+  ) {
+    return this.pmSuryaGharService.createItem(id, request.user, dto);
+  }
+
+  @Patch(':id/items/:itemId')
+  @ApiOperation({
+    summary: 'Update an item in an accessible application draft',
+  })
+  updateItem(
+    @Req() request: { user: JwtPayload },
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+    @Body() dto: UpdatePmSuryaGharItemDto,
+  ) {
+    return this.pmSuryaGharService.updateItem(id, itemId, request.user, dto);
+  }
+
+  @Delete(':id/items/:itemId')
+  @ApiOperation({
+    summary: 'Remove an item from an accessible application draft',
+  })
+  removeItem(
+    @Req() request: { user: JwtPayload },
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('itemId', new ParseUUIDPipe()) itemId: string,
+  ) {
+    return this.pmSuryaGharService.removeItem(id, itemId, request.user);
   }
 
   @Post(':id/documents')

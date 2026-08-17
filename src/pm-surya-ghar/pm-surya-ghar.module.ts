@@ -2,7 +2,12 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
-import { PmSuryaGharApplication, PmSuryaGharDocument, User } from '../entities';
+import {
+  PmSuryaGharApplication,
+  PmSuryaGharDocument,
+  PmSuryaGharItem,
+  User,
+} from '../entities';
 import { PmSuryaGharController } from './pm-surya-ghar.controller';
 import { PmSuryaGharService } from './pm-surya-ghar.service';
 
@@ -11,6 +16,7 @@ import { PmSuryaGharService } from './pm-surya-ghar.service';
     TypeOrmModule.forFeature([
       PmSuryaGharApplication,
       PmSuryaGharDocument,
+      PmSuryaGharItem,
       User,
     ]),
     CloudinaryModule,

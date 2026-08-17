@@ -13,6 +13,7 @@ export * from './order.entity';
 export * from './product.entity';
 export * from './pm-surya-ghar-application.entity';
 export * from './pm-surya-ghar-document.entity';
+export * from './pm-surya-ghar-item.entity';
 export * from './solar-project-media.entity';
 export * from './solar-project.entity';
 export * from './user.entity';

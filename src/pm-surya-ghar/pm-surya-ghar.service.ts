@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PDFDocument, PDFName } from 'pdf-lib';
-import { EntityManager, Repository } from 'typeorm';
+import { EntityManager, In, Repository } from 'typeorm';
 
 import { JwtPayload } from '../auth/interfaces/jwt-payload.interface';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
@@ -22,17 +22,26 @@ import {
   PmSuryaGharDocument,
   PmSuryaGharDocumentType,
 } from '../entities/pm-surya-ghar-document.entity';
+import {
+  PmSuryaGharItem,
+  PmSuryaGharItemUnit,
+} from '../entities/pm-surya-ghar-item.entity';
 import { User } from '../entities/user.entity';
 import { CreatePmSuryaGharApplicationDto } from './dto/create-pm-surya-ghar-application.dto';
+import { CreatePmSuryaGharItemDto } from './dto/create-pm-surya-ghar-item.dto';
 import { UpdatePmSuryaGharApplicationDto } from './dto/update-pm-surya-ghar-application.dto';
+import { UpdatePmSuryaGharItemDto } from './dto/update-pm-surya-ghar-item.dto';
 import { UploadPmSuryaGharDocumentDto } from './dto/upload-pm-surya-ghar-document.dto';
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_PDF_PAGES = 30;
 const MAX_DOCUMENTS_PER_APPLICATION = 25;
 const MAX_DOCUMENT_BYTES_PER_APPLICATION = 200 * 1024 * 1024;
+const MAX_ITEMS_PER_APPLICATION = 250;
 const DUPLICATE_DOCUMENT_CONSTRAINT =
   'pm_surya_ghar_documents_application_sha256_unique';
+const DUPLICATE_ITEM_SERIAL_CONSTRAINT =
+  'pm_surya_ghar_items_application_serial_unique';
 
 export interface UploadedPmSuryaGharPdf {
   originalname: string;
@@ -50,6 +59,20 @@ export interface PmSuryaGharDocumentResponse {
   fileSizeBytes: number;
   pageCount: number;
   createdAt: Date;
+}
+
+export interface PmSuryaGharItemResponse {
+  id: string;
+  itemName: string;
+  brand: string | null;
+  serialNumber: string | null;
+  unit: PmSuryaGharItemUnit;
+  quantity: string;
+  unitPrice: string;
+  lineTotal: string;
+  displayOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface PmSuryaGharApplicationResponse {
@@ -74,6 +97,8 @@ export interface PmSuryaGharApplicationResponse {
   createdAt: Date;
   updatedAt: Date;
   documents: PmSuryaGharDocumentResponse[];
+  items: PmSuryaGharItemResponse[];
+  itemsGrandTotal: string;
 }
 
 export interface PmSuryaGharDownloadResponse {
@@ -93,6 +118,8 @@ export class PmSuryaGharService {
     private readonly applications: Repository<PmSuryaGharApplication>,
     @InjectRepository(PmSuryaGharDocument)
     private readonly documents: Repository<PmSuryaGharDocument>,
+    @InjectRepository(PmSuryaGharItem)
+    private readonly items: Repository<PmSuryaGharItem>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly cloudinaryService: CloudinaryService,
@@ -126,14 +153,13 @@ export class PmSuryaGharService {
     });
     const saved = await this.applications.save(application);
     saved.documents = [];
+    saved.items = [];
     return this.toApplicationResponse(saved);
   }
 
   async findAll(actor: JwtPayload): Promise<PmSuryaGharApplicationResponse[]> {
     const currentActor = await this.requireCurrentActor(actor.sub);
-    const builder = this.applications
-      .createQueryBuilder('application')
-      .leftJoinAndSelect('application.documents', 'document');
+    const builder = this.applications.createQueryBuilder('application');
     if (currentActor.role !== UserRole.ADMIN) {
       builder.where('application.created_by = :createdBy', {
         createdBy: currentActor.id,
@@ -141,8 +167,8 @@ export class PmSuryaGharService {
     }
     const applications = await builder
       .orderBy('application.updated_at', 'DESC')
-      .addOrderBy('document.created_at', 'ASC')
       .getMany();
+    await this.loadApplicationDetails(applications);
     return applications.map((application) =>
       this.toApplicationResponse(application),
     );
@@ -175,6 +201,130 @@ export class PmSuryaGharService {
     });
     return this.toApplicationResponse(
       await this.requireAccessibleApplication(id, currentActor),
+    );
+  }
+
+  async createItem(
+    applicationId: string,
+    actor: JwtPayload,
+    dto: CreatePmSuryaGharItemDto,
+  ): Promise<PmSuryaGharApplicationResponse> {
+    const currentActor = await this.requireCurrentActor(actor.sub);
+    try {
+      await this.applications.manager.transaction(async (manager) => {
+        const application = await this.lockAccessibleDraft(
+          manager,
+          applicationId,
+          currentActor,
+        );
+        const repository = manager.getRepository(PmSuryaGharItem);
+        const itemCount = await repository.count({ where: { applicationId } });
+        if (itemCount >= MAX_ITEMS_PER_APPLICATION) {
+          throw new BadRequestException(
+            `An application can contain up to ${MAX_ITEMS_PER_APPLICATION} supplied items.`,
+          );
+        }
+        const lastItem = await repository.findOne({
+          select: { displayOrder: true },
+          where: { applicationId },
+          order: { displayOrder: 'DESC' },
+        });
+        const displayOrder = (lastItem?.displayOrder ?? -1) + 1;
+        await repository.save(
+          repository.create({
+            applicationId,
+            itemName: this.requiredText(dto.itemName, 'Item name'),
+            brand: this.optionalText(dto.brand),
+            physicalSerialNumber: this.optionalText(dto.serialNumber),
+            unit: dto.unit,
+            quantity: this.quantityValue(dto.quantity),
+            unitPrice: this.moneyValue(dto.unitPrice),
+            displayOrder,
+            createdBy: currentActor.id,
+          }),
+        );
+        application.updatedAt = new Date();
+        await manager.save(application);
+      });
+    } catch (error) {
+      this.rethrowFriendlyItemSerialConflict(error);
+    }
+    return this.toApplicationResponse(
+      await this.requireAccessibleApplication(applicationId, currentActor),
+    );
+  }
+
+  async updateItem(
+    applicationId: string,
+    itemId: string,
+    actor: JwtPayload,
+    dto: UpdatePmSuryaGharItemDto,
+  ): Promise<PmSuryaGharApplicationResponse> {
+    const currentActor = await this.requireCurrentActor(actor.sub);
+    try {
+      await this.applications.manager.transaction(async (manager) => {
+        const application = await this.lockAccessibleDraft(
+          manager,
+          applicationId,
+          currentActor,
+        );
+        const repository = manager.getRepository(PmSuryaGharItem);
+        const item = await repository.findOne({
+          where: { id: itemId, applicationId },
+        });
+        if (!item) {
+          throw new NotFoundException('PM Surya Ghar item not found.');
+        }
+        this.applyItemUpdate(item, dto);
+        await repository.save(item);
+        application.updatedAt = new Date();
+        await manager.save(application);
+      });
+    } catch (error) {
+      this.rethrowFriendlyItemSerialConflict(error);
+    }
+    return this.toApplicationResponse(
+      await this.requireAccessibleApplication(applicationId, currentActor),
+    );
+  }
+
+  async removeItem(
+    applicationId: string,
+    itemId: string,
+    actor: JwtPayload,
+  ): Promise<PmSuryaGharApplicationResponse> {
+    const currentActor = await this.requireCurrentActor(actor.sub);
+    await this.applications.manager.transaction(async (manager) => {
+      const application = await this.lockAccessibleDraft(
+        manager,
+        applicationId,
+        currentActor,
+      );
+      const repository = manager.getRepository(PmSuryaGharItem);
+      const item = await repository.findOne({
+        where: { id: itemId, applicationId },
+      });
+      if (!item) {
+        throw new NotFoundException('PM Surya Ghar item not found.');
+      }
+      await repository.remove(item);
+      const remainingItems = await repository.find({
+        where: { applicationId },
+        order: { displayOrder: 'ASC', createdAt: 'ASC' },
+      });
+      const resequencedItems = remainingItems.filter((remaining, index) => {
+        if (remaining.displayOrder === index) return false;
+        remaining.displayOrder = index;
+        return true;
+      });
+      if (resequencedItems.length > 0) {
+        await repository.save(resequencedItems);
+      }
+      application.updatedAt = new Date();
+      await manager.save(application);
+    });
+    return this.toApplicationResponse(
+      await this.requireAccessibleApplication(applicationId, currentActor),
     );
   }
 
@@ -311,6 +461,14 @@ export class PmSuryaGharService {
           'Add at least one PDF before marking this application ready.',
         );
       }
+      const itemCount = await manager.count(PmSuryaGharItem, {
+        where: { applicationId: id },
+      });
+      if (itemCount === 0) {
+        throw new BadRequestException(
+          'Add at least one supplied item before marking this application ready.',
+        );
+      }
       application.status = PmSuryaGharApplicationStatus.READY;
       application.submittedAt = new Date();
       await manager.save(application);
@@ -341,16 +499,11 @@ export class PmSuryaGharService {
   private async requireAccessibleApplication(
     id: string,
     actor: CurrentPmSuryaGharActor,
-    includeDocuments = true,
+    includeDetails = true,
   ): Promise<PmSuryaGharApplication> {
     const builder = this.applications
       .createQueryBuilder('application')
       .where('application.id = :id', { id });
-    if (includeDocuments) {
-      builder
-        .leftJoinAndSelect('application.documents', 'document')
-        .orderBy('document.created_at', 'ASC');
-    }
     if (actor.role !== UserRole.ADMIN) {
       builder.andWhere('application.created_by = :createdBy', {
         createdBy: actor.id,
@@ -360,7 +513,38 @@ export class PmSuryaGharService {
     if (!application) {
       throw new NotFoundException('PM Surya Ghar application not found.');
     }
+    if (includeDetails) {
+      await this.loadApplicationDetails([application]);
+    }
     return application;
+  }
+
+  private async loadApplicationDetails(
+    applications: PmSuryaGharApplication[],
+  ): Promise<void> {
+    if (applications.length === 0) return;
+    const applicationIds = applications.map((application) => application.id);
+    const documents = await this.documents.find({
+      where: { applicationId: In(applicationIds) },
+      order: { createdAt: 'ASC' },
+    });
+    const items = await this.items.find({
+      where: { applicationId: In(applicationIds) },
+      order: { displayOrder: 'ASC', createdAt: 'ASC' },
+    });
+    const applicationsById = new Map(
+      applications.map((application) => {
+        application.documents = [];
+        application.items = [];
+        return [application.id, application] as const;
+      }),
+    );
+    for (const document of documents) {
+      applicationsById.get(document.applicationId)?.documents.push(document);
+    }
+    for (const item of items) {
+      applicationsById.get(item.applicationId)?.items.push(item);
+    }
   }
 
   private async lockAccessibleDraft(
@@ -449,6 +633,30 @@ export class PmSuryaGharService {
     }
   }
 
+  private applyItemUpdate(
+    item: PmSuryaGharItem,
+    dto: UpdatePmSuryaGharItemDto,
+  ): void {
+    if (dto.itemName !== undefined) {
+      item.itemName = this.requiredText(dto.itemName, 'Item name');
+    }
+    if (dto.brand !== undefined) {
+      item.brand = this.optionalText(dto.brand);
+    }
+    if (dto.serialNumber !== undefined) {
+      item.physicalSerialNumber = this.optionalText(dto.serialNumber);
+    }
+    if (dto.unit !== undefined) {
+      item.unit = dto.unit;
+    }
+    if (dto.quantity !== undefined) {
+      item.quantity = this.quantityValue(dto.quantity);
+    }
+    if (dto.unitPrice !== undefined) {
+      item.unitPrice = this.moneyValue(dto.unitPrice);
+    }
+  }
+
   private async validatePdf(
     file: UploadedPmSuryaGharPdf | undefined,
   ): Promise<{ pageCount: number; sha256: string }> {
@@ -529,9 +737,42 @@ export class PmSuryaGharService {
     return code === '23505' && constraint === DUPLICATE_DOCUMENT_CONSTRAINT;
   }
 
+  private rethrowFriendlyItemSerialConflict(error: unknown): never {
+    if (
+      this.isDatabaseConstraintError(error, DUPLICATE_ITEM_SERIAL_CONSTRAINT)
+    ) {
+      throw new ConflictException(
+        'This serial number is already assigned to another item in the application.',
+      );
+    }
+    throw error;
+  }
+
+  private isDatabaseConstraintError(
+    error: unknown,
+    expectedConstraint: string,
+  ): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const value = error as {
+      code?: unknown;
+      constraint?: unknown;
+      driverError?: { code?: unknown; constraint?: unknown };
+    };
+    const code = value.code ?? value.driverError?.code;
+    const constraint = value.constraint ?? value.driverError?.constraint;
+    return code === '23505' && constraint === expectedConstraint;
+  }
+
   private toApplicationResponse(
     application: PmSuryaGharApplication,
   ): PmSuryaGharApplicationResponse {
+    const items = [...(application.items ?? [])]
+      .sort(
+        (left, right) =>
+          left.displayOrder - right.displayOrder ||
+          left.createdAt.getTime() - right.createdAt.getTime(),
+      )
+      .map((item) => this.toItemResponse(item));
     return {
       id: application.id,
       createdBy: application.createdBy,
@@ -561,6 +802,8 @@ export class PmSuryaGharService {
           (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
         )
         .map((document) => this.toDocumentResponse(document)),
+      items,
+      itemsGrandTotal: this.sumMoney(items.map((item) => item.lineTotal)),
     };
   }
 
@@ -579,6 +822,22 @@ export class PmSuryaGharService {
     };
   }
 
+  private toItemResponse(item: PmSuryaGharItem): PmSuryaGharItemResponse {
+    return {
+      id: item.id,
+      itemName: item.itemName,
+      brand: item.brand ?? null,
+      serialNumber: item.physicalSerialNumber ?? null,
+      unit: item.unit,
+      quantity: this.fixedDecimal(item.quantity, 3),
+      unitPrice: this.fixedDecimal(item.unitPrice, 2),
+      lineTotal: this.fixedDecimal(item.lineTotal, 2),
+      displayOrder: item.displayOrder,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    };
+  }
+
   private requiredText(value: unknown, field: string): string {
     if (typeof value !== 'string' || !value.trim()) {
       throw new BadRequestException(`${field} is required.`);
@@ -593,6 +852,47 @@ export class PmSuryaGharService {
 
   private loadValue(value: number | null | undefined): string | null {
     return value == null ? null : value.toFixed(2);
+  }
+
+  private quantityValue(value: number): string {
+    return value.toFixed(3);
+  }
+
+  private moneyValue(value: number): string {
+    return value.toFixed(2);
+  }
+
+  private sumMoney(values: string[]): string {
+    const cents = values.reduce(
+      (total, value) => total + this.decimalToMinorUnits(value, 2),
+      0n,
+    );
+    const whole = cents / 100n;
+    const fraction = (cents % 100n).toString().padStart(2, '0');
+    return `${whole}.${fraction}`;
+  }
+
+  private fixedDecimal(value: string, scale: number): string {
+    const units = this.decimalToMinorUnits(value, scale);
+    const factor = 10n ** BigInt(scale);
+    const whole = units / factor;
+    const fraction = (units % factor).toString().padStart(scale, '0');
+    return `${whole}.${fraction}`;
+  }
+
+  private decimalToMinorUnits(value: string, scale: number): bigint {
+    const normalized = String(value).trim();
+    if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+      throw new Error(
+        'Invalid non-negative decimal value returned by the database.',
+      );
+    }
+    const [whole, fraction = ''] = normalized.split('.');
+    const paddedFraction = fraction.padEnd(scale, '0');
+    if (paddedFraction.length > scale) {
+      throw new Error('Database decimal value exceeds its configured scale.');
+    }
+    return BigInt(whole) * 10n ** BigInt(scale) + BigInt(paddedFraction || '0');
   }
 
   private safeFileName(originalName: string): string {
