@@ -16,6 +16,7 @@ export interface AdminProductRow {
   description: string | null;
   imageUrl: string | null;
   unit: string;
+  unitPrice: string;
   displayOrder: number;
   isActive: boolean;
   createdAt: Date;
@@ -182,6 +183,7 @@ export class ProductsRepository {
         'product.description AS "description"',
         'product.image_url AS "imageUrl"',
         'product.unit AS "unit"',
+        'product.unit_price AS "unitPrice"',
         'product.display_order AS "displayOrder"',
         'product.is_active AS "isActive"',
         'product.created_at AS "createdAt"',
@@ -192,6 +194,7 @@ export class ProductsRepository {
   private normalizeRow(row: AdminProductRow): AdminProductRow {
     return {
       ...row,
+      unitPrice: Number(row.unitPrice).toFixed(2),
       displayOrder: Number(row.displayOrder),
       isActive: Boolean(row.isActive),
     };

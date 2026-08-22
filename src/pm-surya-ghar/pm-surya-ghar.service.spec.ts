@@ -247,7 +247,6 @@ describe('PmSuryaGharService', () => {
       status: PmSuryaGharApplicationStatus.DRAFT,
       documents: [],
       items: [],
-      itemsGrandTotal: '0.00',
     });
   });
 
@@ -332,9 +331,12 @@ describe('PmSuryaGharService', () => {
       createdBy: admin.sub,
       staffVisible: true,
       documents: [],
-      items: [],
+      items: [suppliedItem()],
     });
     queryBuilder.getOne.mockResolvedValue(sharedAdmin);
+    items.find.mockResolvedValue([
+      suppliedItem({ applicationId: sharedAdmin.id }),
+    ]);
 
     const result = await service.findOne(sharedAdmin.id, staff);
 
@@ -349,6 +351,9 @@ describe('PmSuryaGharService', () => {
       isSharedWithStaff: true,
       canManage: false,
     });
+    expect(result).not.toHaveProperty('itemsGrandTotal');
+    expect(result.items[0]).not.toHaveProperty('unitPrice');
+    expect(result.items[0]).not.toHaveProperty('lineTotal');
   });
 
   it('does not expose another STAFF member private application or details', async () => {
@@ -597,6 +602,30 @@ describe('PmSuryaGharService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  it('allows an ADMIN to correct customer details after an application is ready', async () => {
+    const ready = application({
+      status: PmSuryaGharApplicationStatus.READY,
+      createdBy: staff.sub,
+    });
+    users.findOne.mockResolvedValueOnce({
+      id: admin.sub,
+      role: UserRole.ADMIN,
+      isActive: true,
+    });
+    transactionManager.findOne.mockResolvedValue(ready);
+    queryBuilder.getOne.mockResolvedValue(ready);
+
+    const result = await service.update(ready.id, admin, {
+      customerName: 'Corrected customer',
+      notes: 'Corrected after review',
+    });
+
+    expect(ready.status).toBe(PmSuryaGharApplicationStatus.READY);
+    expect(ready.customerName).toBe('Corrected customer');
+    expect(ready.notes).toBe('Corrected after review');
+    expect(result.canManage).toBe(true);
+  });
+
   it('adds an item under the owner lock without accepting a client total', async () => {
     const draft = application();
     const item = suppliedItem();
@@ -632,13 +661,11 @@ describe('PmSuryaGharService', () => {
       createdBy: staff.sub,
     });
     expect(result.items).toEqual([
-      expect.objectContaining({
-        quantity: '15.000',
-        unitPrice: '2.50',
-        lineTotal: '37.50',
-      }),
+      expect.objectContaining({ quantity: '15.000' }),
     ]);
-    expect(result.itemsGrandTotal).toBe('37.50');
+    expect(result.items[0]).not.toHaveProperty('unitPrice');
+    expect(result.items[0]).not.toHaveProperty('lineTotal');
+    expect(result).not.toHaveProperty('itemsGrandTotal');
   });
 
   it('returns fixed-scale item decimals and sums paise without floating-point loss', async () => {
@@ -661,8 +688,13 @@ describe('PmSuryaGharService', () => {
     ];
     queryBuilder.getOne.mockResolvedValue(draft);
     items.find.mockResolvedValue(draft.items);
+    users.findOne.mockResolvedValueOnce({
+      id: admin.sub,
+      role: UserRole.ADMIN,
+      isActive: true,
+    });
 
-    const result = await service.findOne(draft.id, staff);
+    const result = await service.findOne(draft.id, admin);
 
     expect(result.items.map((item) => item.id)).toEqual(['item-1', 'item-2']);
     expect(result.items[0]).toMatchObject({

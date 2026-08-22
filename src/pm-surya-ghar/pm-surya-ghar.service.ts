@@ -68,8 +68,9 @@ export interface PmSuryaGharItemResponse {
   serialNumber: string | null;
   unit: PmSuryaGharItemUnit;
   quantity: string;
-  unitPrice: string;
-  lineTotal: string;
+  /** Internal pricing is intentionally omitted from every STAFF response. */
+  unitPrice?: string;
+  lineTotal?: string;
   displayOrder: number;
   createdAt: Date;
   updatedAt: Date;
@@ -100,7 +101,8 @@ export interface PmSuryaGharApplicationResponse {
   updatedAt: Date;
   documents: PmSuryaGharDocumentResponse[];
   items: PmSuryaGharItemResponse[];
-  itemsGrandTotal: string;
+  /** Internal pricing is intentionally omitted from every STAFF response. */
+  itemsGrandTotal?: string;
 }
 
 export interface PmSuryaGharDownloadResponse {
@@ -196,7 +198,7 @@ export class PmSuryaGharService {
   ): Promise<PmSuryaGharApplicationResponse> {
     const currentActor = await this.requireCurrentActor(actor.sub);
     await this.applications.manager.transaction(async (manager) => {
-      const application = await this.lockAccessibleDraft(
+      const application = await this.lockManageableApplication(
         manager,
         id,
         currentActor,
@@ -596,6 +598,36 @@ export class PmSuryaGharService {
     return application;
   }
 
+  /**
+   * Customer details can be corrected by an administrator after internal
+   * review. Staff can still change only their own drafts.
+   */
+  private async lockManageableApplication(
+    manager: EntityManager,
+    id: string,
+    actor: CurrentPmSuryaGharActor,
+  ): Promise<PmSuryaGharApplication> {
+    const application = await manager.findOne(PmSuryaGharApplication, {
+      where:
+        actor.role === UserRole.ADMIN
+          ? { id }
+          : { id, createdBy: actor.id, staffVisible: false },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!application) {
+      throw new NotFoundException('PM Surya Ghar application not found.');
+    }
+    if (
+      application.status !== PmSuryaGharApplicationStatus.DRAFT &&
+      actor.role !== UserRole.ADMIN
+    ) {
+      throw new ConflictException(
+        'Only an administrator can correct customer details after an application is ready.',
+      );
+    }
+    return application;
+  }
+
   private assertDraft(application: PmSuryaGharApplication): void {
     if (application.status !== PmSuryaGharApplicationStatus.DRAFT) {
       throw new ConflictException(
@@ -799,13 +831,14 @@ export class PmSuryaGharService {
     application: PmSuryaGharApplication,
     actor: CurrentPmSuryaGharActor,
   ): PmSuryaGharApplicationResponse {
+    const canSeeAmounts = actor.role === UserRole.ADMIN;
     const items = [...(application.items ?? [])]
       .sort(
         (left, right) =>
           left.displayOrder - right.displayOrder ||
           left.createdAt.getTime() - right.createdAt.getTime(),
       )
-      .map((item) => this.toItemResponse(item));
+      .map((item) => this.toItemResponse(item, canSeeAmounts));
     return {
       id: application.id,
       createdBy: application.createdBy,
@@ -841,7 +874,13 @@ export class PmSuryaGharService {
         )
         .map((document) => this.toDocumentResponse(document)),
       items,
-      itemsGrandTotal: this.sumMoney(items.map((item) => item.lineTotal)),
+      ...(canSeeAmounts
+        ? {
+            itemsGrandTotal: this.sumMoney(
+              items.map((item) => item.lineTotal ?? '0.00'),
+            ),
+          }
+        : {}),
     };
   }
 
@@ -860,7 +899,10 @@ export class PmSuryaGharService {
     };
   }
 
-  private toItemResponse(item: PmSuryaGharItem): PmSuryaGharItemResponse {
+  private toItemResponse(
+    item: PmSuryaGharItem,
+    includeAmounts: boolean,
+  ): PmSuryaGharItemResponse {
     return {
       id: item.id,
       itemName: item.itemName,
@@ -868,8 +910,12 @@ export class PmSuryaGharService {
       serialNumber: item.physicalSerialNumber ?? null,
       unit: item.unit,
       quantity: this.fixedDecimal(item.quantity, 3),
-      unitPrice: this.fixedDecimal(item.unitPrice, 2),
-      lineTotal: this.fixedDecimal(item.lineTotal, 2),
+      ...(includeAmounts
+        ? {
+            unitPrice: this.fixedDecimal(item.unitPrice, 2),
+            lineTotal: this.fixedDecimal(item.lineTotal, 2),
+          }
+        : {}),
       displayOrder: item.displayOrder,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,

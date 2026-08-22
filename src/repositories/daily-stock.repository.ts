@@ -11,6 +11,7 @@ export interface TodayStockItem {
   sku: string;
   productName: string;
   unit: string;
+  unitPrice: string;
   categoryId: string;
   categoryName: string;
   quantity: number;
@@ -29,6 +30,7 @@ export interface AdminDailyStockItem {
   categoryId: string;
   categoryName: string;
   unit: string;
+  unitPrice: string;
   quantity: number;
   sourceStockDate: string | null;
   isCarriedForward: boolean;
@@ -41,6 +43,7 @@ type ResolvedStockRow = {
   sku: string;
   productName: string;
   unit: string;
+  unitPrice: string | number;
   categoryId: string;
   categoryName: string;
   quantity: string | number;
@@ -114,6 +117,7 @@ export class DailyStockRepository {
       categoryId: row.categoryId,
       categoryName: row.categoryName,
       unit: row.unit,
+      unitPrice: this.money(row.unitPrice),
       quantity: this.quantity(row),
       sourceStockDate: row.sourceStockDate,
       isCarriedForward: this.boolean(row.isCarriedForward),
@@ -162,6 +166,7 @@ export class DailyStockRepository {
       'product.sku AS "sku"',
       'product.name AS "productName"',
       'product.unit AS "unit"',
+      'product.unit_price AS "unitPrice"',
       'category.id AS "categoryId"',
       'category.name AS "categoryName"',
       'product.is_active AS "isActive"',
@@ -179,6 +184,7 @@ export class DailyStockRepository {
       sku: row.sku,
       productName: row.productName,
       unit: row.unit,
+      unitPrice: this.money(row.unitPrice),
       categoryId: row.categoryId,
       categoryName: row.categoryName,
       quantity: this.quantity(row),
@@ -192,6 +198,11 @@ export class DailyStockRepository {
 
   private quantity(row: ResolvedStockRow): number {
     return Math.max(0, Number(row.quantity));
+  }
+
+  private money(value: string | number): string {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed.toFixed(2) : '0.00';
   }
 
   private boolean(value: boolean | string | undefined): boolean {

@@ -53,6 +53,7 @@ interface ValidatedProductImportRow {
   description: string | null;
   imageUrl: string | null;
   unit: ProductUnit;
+  unitPrice: number;
   displayOrder: number;
   isActive: boolean;
   errors: string[];
@@ -128,6 +129,7 @@ export class ProductsService {
         description: this.normalizedNullable(dto.description),
         imageUrl: this.normalizedNullable(dto.imageUrl),
         unit: dto.unit,
+        unitPrice: (dto.unitPrice ?? 0).toFixed(2),
         displayOrder: dto.displayOrder ?? 0,
         isActive: dto.isActive ?? true,
       }),
@@ -163,6 +165,7 @@ export class ProductsService {
                   description: row.description,
                   imageUrl: row.imageUrl,
                   unit: row.unit,
+                  unitPrice: row.unitPrice.toFixed(2),
                   displayOrder: row.displayOrder,
                   isActive: row.isActive,
                 }),
@@ -213,6 +216,8 @@ export class ProductsService {
       product.imageUrl = this.normalizedNullable(dto.imageUrl);
     }
     if (dto.unit !== undefined) product.unit = dto.unit;
+    if (dto.unitPrice !== undefined)
+      product.unitPrice = dto.unitPrice.toFixed(2);
     if (dto.displayOrder !== undefined) product.displayOrder = dto.displayOrder;
     if (dto.isActive !== undefined) product.isActive = dto.isActive;
     await this.productsRepository.save(product);
@@ -308,6 +313,7 @@ export class ProductsService {
         description: this.normalizedNullable(value('description')),
         imageUrl: this.normalizedNullable(value('image_url')),
         unit: value('unit').toUpperCase(),
+        unitPrice: value('unit_price'),
         displayOrder: value('display_order'),
         isActive: value('is_active'),
       };
@@ -338,6 +344,12 @@ export class ProductsService {
       }
       const unit = this.parseUnit(raw.unit);
       if (!unit) errors.push('unit must be PIECE, SET, or BOX.');
+      const unitPrice = this.parseNonNegativeMoney(raw.unitPrice, 0);
+      if (unitPrice === null) {
+        errors.push(
+          'unit_price must be an amount from 0.00 to 9999999999.99 with up to 2 decimal places.',
+        );
+      }
       const displayOrder = this.parseNonNegativeInteger(raw.displayOrder, 0);
       if (displayOrder === null) {
         errors.push('display_order must be a whole number from 0 to 1000000.');
@@ -353,6 +365,7 @@ export class ProductsService {
         description: raw.description,
         imageUrl: raw.imageUrl,
         unit: unit ?? ProductUnit.PIECE,
+        unitPrice: unitPrice ?? 0,
         displayOrder: displayOrder ?? 0,
         isActive: isActive ?? true,
         errors,
@@ -476,6 +489,16 @@ export class ProductsService {
     if (!/^\d+$/.test(value)) return null;
     const number = Number(value);
     return number <= 1000000 ? number : null;
+  }
+
+  private parseNonNegativeMoney(
+    value: string,
+    fallback: number,
+  ): number | null {
+    if (!value) return fallback;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount <= 9999999999.99 ? amount : null;
   }
 
   private parseBoolean(value: string, fallback: boolean): boolean | null {

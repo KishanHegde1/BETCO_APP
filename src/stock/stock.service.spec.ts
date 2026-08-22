@@ -50,6 +50,7 @@ describe('StockService', () => {
         productName: 'Battery',
         sku: 'BAT-1',
         unit: 'PIECE',
+        unitPrice: '12500.00',
         categoryId: 'category-1',
         categoryName: 'Battery',
         quantity: 48,
@@ -70,6 +71,7 @@ describe('StockService', () => {
     ]);
     const [item] = items;
     expect(item).not.toHaveProperty('quantity');
+    expect(item).not.toHaveProperty('unitPrice');
   });
 
   it('rejects a non-ISO stock-as-of date', () => {

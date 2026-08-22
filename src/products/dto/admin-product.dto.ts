@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUrl,
@@ -61,6 +62,19 @@ export class CreateAdminProductDto {
   @IsEnum(ProductUnit)
   unit!: ProductUnit;
 
+  @ApiPropertyOptional({
+    example: 12500,
+    default: 0,
+    description:
+      'Internal per-unit stock reference price. Not visible to dealers.',
+  })
+  @Type(() => Number)
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(9999999999.99)
+  unitPrice?: number;
+
   @ApiPropertyOptional({ example: 0, default: 0 })
   @IsOptional()
   @IsInt()
@@ -114,6 +128,18 @@ export class UpdateAdminProductDto {
   @IsOptional()
   @IsEnum(ProductUnit)
   unit?: ProductUnit;
+
+  @ApiPropertyOptional({
+    example: 12500,
+    description:
+      'Internal per-unit stock reference price. Not visible to dealers.',
+  })
+  @Type(() => Number)
+  @IsOptional()
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(9999999999.99)
+  unitPrice?: number;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()

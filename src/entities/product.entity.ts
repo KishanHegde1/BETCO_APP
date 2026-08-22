@@ -33,6 +33,19 @@ export class Product extends BaseEntity {
   @Column({ type: 'varchar', length: 20, default: ProductUnit.PIECE })
   unit!: ProductUnit;
 
+  /**
+   * Internal stock reference price. It is deliberately not returned to dealer
+   * catalogue endpoints.
+   */
+  @Column({
+    name: 'unit_price',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+    default: 0,
+  })
+  unitPrice!: string;
+
   @Column({ name: 'display_order', type: 'integer', default: 0 })
   displayOrder!: number;
 

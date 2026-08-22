@@ -58,7 +58,10 @@ interface StaffStockAdjustment {
 }
 
 /** Dealer-safe stock view. Exact inventory is restricted to staff and admins. */
-export type DealerStockAvailabilityItem = Omit<TodayStockItem, 'quantity'>;
+export type DealerStockAvailabilityItem = Omit<
+  TodayStockItem,
+  'quantity' | 'unitPrice'
+>;
 
 @Injectable()
 export class StockService {
@@ -74,7 +77,19 @@ export class StockService {
     date?: string,
   ): Promise<DealerStockAvailabilityItem[]> {
     const items = await this.getTodayStock(date);
-    return items.map(({ quantity: _quantity, ...item }) => item);
+    return items.map((item) => ({
+      productId: item.productId,
+      sku: item.sku,
+      productName: item.productName,
+      unit: item.unit,
+      categoryId: item.categoryId,
+      categoryName: item.categoryName,
+      stockDate: item.stockDate,
+      sourceStockDate: item.sourceStockDate,
+      isCarriedForward: item.isCarriedForward,
+      isAvailable: item.isAvailable,
+      stockUpdatedAt: item.stockUpdatedAt,
+    }));
   }
 
   async getAdminStockForDate(
