@@ -571,20 +571,36 @@ export class PriceListsService {
     const fallback = cells
       .slice(0, gstIncludedColumn)
       .filter((cell) => !/^\d+[.)]?$/.test(cell))
-      .filter((cell) => this.pdfMoney(cell) === null)
+      .filter((cell) => !this.isPdfNumericValue(cell))
+      .filter((cell) => !/^\d+(?:\.\d+)?V$/i.test(cell))
+      .filter((cell) => !/^\d+\+\d+\*?$/.test(cell))
+      .filter((cell) => !/^\d+(?:\.\d+)?%$/.test(cell))
       .join(' ');
-    const modelName = (selected ?? fallback).replace(/^\d+[.)]?\s*/, '').trim();
-    return /[A-Z]/i.test(modelName) ? modelName : null;
+    const useSelectedModel =
+      selected != null &&
+      !/^\d+(?:\.\d+)?V$/i.test(selected) &&
+      !/^\d+\+\d+\*?$/.test(selected) &&
+      !/^\d+(?:\.\d+)?%$/.test(selected);
+    const modelName = (useSelectedModel ? selected : fallback)
+      .replace(/^\d+[.)]?\s*/, '')
+      .trim();
+    return modelName ? modelName : null;
   }
 
   private pdfMoney(value: string | undefined): number | null {
     if (!value) return null;
+    if (!this.isPdfNumericValue(value)) return null;
     const cleaned = value.replace(/[^0-9.,]/g, '').replace(/,/g, '');
-    if (!/^\d+(?:\.\d{1,2})?$/.test(cleaned)) return null;
     const amount = Number(cleaned);
     return Number.isFinite(amount) && amount >= 0 && amount <= 9999999999.99
       ? amount
       : null;
+  }
+
+  private isPdfNumericValue(value: string): boolean {
+    return /^(?:(?:₹|RS\.?|INR)\s*)?\d[\d,]*(?:\.\d{1,2})?$/i.test(
+      value.trim(),
+    );
   }
 
   private assertPriceListPdf(

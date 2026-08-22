@@ -124,4 +124,30 @@ describe('PriceListsService', () => {
       ],
     });
   });
+
+  it('handles PDFs where an inverter range is visually merged into the model column', async () => {
+    (pdfParse as jest.Mock).mockResolvedValue({
+      numpages: 1,
+      text: [
+        'Range\tModel\tDC Voltage\tNet Effective Price GST Rate\tTax Amount\tGST Included Price\tMRP',
+        'ICON 1100\t12V\t8281\t18%\t1491\t9771\t14500',
+        '220 RC 26000 PRO\t24+24*\t15630\t18%\t2813\t18443\t23500',
+      ].join('\n'),
+    });
+
+    const result = await service.extractPdf({
+      buffer: Buffer.from('%PDF-example'),
+      originalname: 'luminous-price-list.pdf',
+      size: 12,
+    });
+
+    expect(result.rows).toEqual([
+      { rowNumber: 1, modelName: 'ICON 1100', gstIncludedPrice: 9771 },
+      {
+        rowNumber: 2,
+        modelName: 'RC 26000 PRO',
+        gstIncludedPrice: 18443,
+      },
+    ]);
+  });
 });
