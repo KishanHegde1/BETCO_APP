@@ -6,10 +6,14 @@ import {
   ParseUUIDPipe,
   Post,
   Req,
+  UploadedFile,
+  UseInterceptors,
   UseGuards,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiConsumes,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
@@ -27,7 +31,11 @@ import {
   PriceListPreviewResponse,
   PriceListResponse,
   PriceListsService,
+  PriceListPdfExtractionResponse,
+  UploadedPriceListPdf,
 } from './price-lists.service';
+
+const MAX_PRICE_LIST_PDF_BYTES = 10 * 1024 * 1024;
 
 @ApiTags('Admin Price Lists')
 @ApiBearerAuth()
@@ -47,6 +55,27 @@ export class PriceListsController {
   @ApiOperation({ summary: 'Get the current active Price List, if any' })
   findActive(): Promise<PriceListDetailResponse | null> {
     return this.priceListsService.findActive();
+  }
+
+  @Post('extract-pdf')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { files: 1, fileSize: MAX_PRICE_LIST_PDF_BYTES },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary:
+      'Extract reviewable model and GST-included-price rows from a supplier PDF',
+  })
+  @ApiOkResponse({
+    description:
+      'Returns extracted rows only when a GST Included Price column is explicitly identified.',
+  })
+  extractPdf(
+    @UploadedFile() file?: unknown,
+  ): Promise<PriceListPdfExtractionResponse> {
+    return this.priceListsService.extractPdf(file as UploadedPriceListPdf);
   }
 
   @Post('preview')

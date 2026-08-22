@@ -1,7 +1,11 @@
+import pdfParse from 'pdf-parse';
+
 import { PriceListItemMatchStatus } from '../entities/price-list-item.entity';
 import { Product } from '../entities/product.entity';
 import { PreviewPriceListDto } from './dto/price-list.dto';
 import { PriceListsService } from './price-lists.service';
+
+jest.mock('pdf-parse', () => jest.fn());
 
 describe('PriceListsService', () => {
   const priceLists = { findOne: jest.fn() };
@@ -92,6 +96,32 @@ describe('PriceListsService', () => {
     expect(result.rows[1]).toMatchObject({
       oldGstIncludedPrice: '12000.00',
       gstIncludedPrice: '12500.00',
+    });
+  });
+
+  it('extracts only the explicitly labelled GST-included price column from a PDF', async () => {
+    (pdfParse as jest.Mock).mockResolvedValue({
+      numpages: 1,
+      text: [
+        'Sl No\tModel\tGST Included Price\tMRP',
+        '1\tInverter 10036\t10,000.00\t12,000.00',
+        '2\tSolar Wire 90m\t5,500.50\t6,000.00',
+      ].join('\n'),
+    });
+
+    const result = await service.extractPdf({
+      buffer: Buffer.from('%PDF-example'),
+      originalname: 'supplier-price-list.pdf',
+      size: 12,
+    });
+
+    expect(result).toMatchObject({
+      fileName: 'supplier-price-list.pdf',
+      pageCount: 1,
+      rows: [
+        { rowNumber: 1, modelName: 'Inverter 10036', gstIncludedPrice: 10000 },
+        { rowNumber: 2, modelName: 'Solar Wire 90m', gstIncludedPrice: 5500.5 },
+      ],
     });
   });
 });
