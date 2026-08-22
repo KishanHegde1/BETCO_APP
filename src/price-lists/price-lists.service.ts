@@ -324,6 +324,47 @@ export class PriceListsService {
     return this.findOne(id);
   }
 
+  /**
+   * Re-checks only retained unmatched rows. This lets an administrator correct
+   * a catalogue product name and deliberately match it from the Price List
+   * details screen, without changing any already matched price rows.
+   */
+  async refreshUnmatchedMatches(id: string): Promise<PriceListDetailResponse> {
+    const list = await this.priceLists.findOneBy({ id });
+    if (!list) throw new NotFoundException('Price List not found.');
+
+    const unmatchedItems = await this.priceListItems.find({
+      where: {
+        priceListId: id,
+        matchStatus: PriceListItemMatchStatus.UNMATCHED,
+      },
+    });
+    if (unmatchedItems.length === 0) return this.findOne(id);
+
+    const products = await this.products.find({
+      select: { id: true, name: true },
+    });
+    const productsByModel = new Map<string, ProductMatch[]>();
+    for (const product of products) {
+      const normalizedName = normalizeModelName(product.name);
+      const matches = productsByModel.get(normalizedName) ?? [];
+      matches.push({ id: product.id, name: product.name });
+      productsByModel.set(normalizedName, matches);
+    }
+
+    const newlyMatched = unmatchedItems.flatMap((item) => {
+      const matches = productsByModel.get(item.normalizedModelName) ?? [];
+      if (matches.length !== 1) return [];
+      item.productId = matches[0].id;
+      item.matchStatus = PriceListItemMatchStatus.MATCHED;
+      return [item];
+    });
+    if (newlyMatched.length > 0) {
+      await this.priceListItems.save(newlyMatched);
+    }
+    return this.findOne(id);
+  }
+
   private async buildPreview(
     dto: PreviewPriceListDto,
     manager?: EntityManager,
@@ -467,7 +508,10 @@ export class PriceListsService {
         const cells: string[] = [];
         let lastRight: number | undefined;
         for (const item of line.items.sort((left, right) => left.x - right.x)) {
-          if (lastRight !== undefined && item.x - lastRight > 18) {
+          // Supplier PDFs often place adjacent table columns closer than their
+          // text widths. A small gap preserves the actual table cells instead
+          // of merging columns such as "Basic Price" and "GST Rate".
+          if (lastRight !== undefined && item.x - lastRight > 5) {
             cells.push(item.text);
           } else if (cells.length === 0) {
             cells.push(item.text);
@@ -485,14 +529,17 @@ export class PriceListsService {
     rows: ExtractedPriceListPdfRow[];
     warnings: string[];
   } {
-    let gstIncludedColumn = -1;
-    let modelColumn = -1;
     let foundGstHeader = false;
+    let readingGstIncludedRows = false;
+    let directGstIncludedColumn = -1;
+    let directModelColumn = -1;
     const rows: ExtractedPriceListPdfRow[] = [];
     const seenModels = new Set<string>();
     const warnings: string[] = [];
+    const sourceLines = text.split(/\r?\n/);
 
-    for (const sourceLine of text.split(/\r?\n/)) {
+    for (var lineIndex = 0; lineIndex < sourceLines.length; lineIndex++) {
+      const sourceLine = sourceLines[lineIndex];
       const cells = sourceLine
         .split('\t')
         .map((cell) => cell.trim().replace(/\s+/g, ' '))
@@ -500,20 +547,30 @@ export class PriceListsService {
       if (cells.length === 0) continue;
 
       const header = this.findPdfHeader(cells);
-      if (header.gstIncludedColumn >= 0) {
-        gstIncludedColumn = header.gstIncludedColumn;
-        modelColumn = header.modelColumn;
+      const hasDirectHeader = header.gstIncludedColumn >= 0;
+      const hasSplitHeader =
+        !hasDirectHeader &&
+        this.hasSplitGstIncludedHeader(sourceLines, lineIndex);
+      if (hasDirectHeader || hasSplitHeader) {
         foundGstHeader = true;
+        readingGstIncludedRows = true;
+        directGstIncludedColumn = hasDirectHeader
+          ? header.gstIncludedColumn
+          : -1;
+        directModelColumn = hasDirectHeader ? header.modelColumn : -1;
         continue;
       }
-      if (gstIncludedColumn < 0 || this.looksLikePdfHeader(cells)) continue;
+      if (!readingGstIncludedRows || this.looksLikePdfHeader(cells)) continue;
 
-      const gstIncludedPrice = this.pdfMoney(cells[gstIncludedColumn]);
-      const modelName = this.pdfModelName(
-        cells,
-        modelColumn,
-        gstIncludedColumn,
-      );
+      const parsed =
+        this.gstIncludedTableRow(cells) ??
+        this.directGstIncludedRow(
+          cells,
+          directModelColumn,
+          directGstIncludedColumn,
+        );
+      if (!parsed) continue;
+      const { gstIncludedPrice, modelName } = parsed;
       if (gstIncludedPrice === null || !modelName) continue;
 
       const normalized = normalizeModelName(modelName);
@@ -535,6 +592,92 @@ export class PriceListsService {
       );
     }
     return { rows, warnings };
+  }
+
+  /**
+   * Some supplier PDFs stack the heading vertically as GST / Included / Price.
+   * It is still an explicit GST Included Price column, but not a single text
+   * cell. The short window prevents recognising unrelated page text as a
+   * price column.
+   */
+  private hasSplitGstIncludedHeader(
+    sourceLines: string[],
+    startIndex: number,
+  ): boolean {
+    const headerText = sourceLines
+      .slice(startIndex, startIndex + 5)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+    return (
+      /\b(MODEL|PRODUCT|ITEM|DESCRIPTION|PARTICULAR)\b/.test(headerText) &&
+      /\bGST\b/.test(headerText) &&
+      /\bINCL(?:UDED|USIVE)?\b/.test(headerText) &&
+      /\bPRICE\b/.test(headerText)
+    );
+  }
+
+  /**
+   * Once an explicit GST Included Price heading is known, table rows identify
+   * the value by its documented order: GST Rate, Tax Amount, GST Included
+   * Price, then MRP. This avoids choosing a Basic Price or MRP by mistake.
+   */
+  private gstIncludedTableRow(cells: string[]): {
+    modelName: string;
+    gstIncludedPrice: number;
+  } | null {
+    const gstRateIndex = cells.findIndex((cell) =>
+      /^\d+(?:\.\d+)?%$/.test(cell),
+    );
+    if (gstRateIndex < 1) return null;
+
+    const amountsAfterGstRate = cells
+      .slice(gstRateIndex + 1)
+      .flatMap((cell) => this.pdfMoneyTokens(cell));
+    // First value is Tax Amount; the second is the explicitly labelled GST
+    // Included Price. A missing Tax Amount therefore safely skips the row.
+    const gstIncludedPrice = amountsAfterGstRate[1];
+    if (gstIncludedPrice === undefined) return null;
+
+    const beforeGstRate = cells.slice(0, gstRateIndex);
+    while (
+      beforeGstRate.length > 0 &&
+      this.isNonModelTableCell(beforeGstRate[beforeGstRate.length - 1])
+    ) {
+      beforeGstRate.pop();
+    }
+    const modelName = beforeGstRate
+      .at(-1)
+      ?.replace(/^(?:\([^)]*\)\s*)+/, '')
+      .replace(/^\d+[.)]?\s*/, '')
+      .trim();
+    return modelName ? { modelName, gstIncludedPrice } : null;
+  }
+
+  private directGstIncludedRow(
+    cells: string[],
+    modelColumn: number,
+    gstIncludedColumn: number,
+  ): { modelName: string; gstIncludedPrice: number } | null {
+    if (gstIncludedColumn < 0) return null;
+    const gstIncludedPrice = this.pdfMoney(cells[gstIncludedColumn]);
+    const modelName = this.pdfModelName(
+      cells,
+      modelColumn,
+      gstIncludedColumn,
+    );
+    return gstIncludedPrice !== null && modelName
+      ? { modelName, gstIncludedPrice }
+      : null;
+  }
+
+  private isNonModelTableCell(value: string): boolean {
+    return (
+      this.isPdfNumericValue(value) ||
+      /^\d+(?:\.\d+)?V$/i.test(value) ||
+      /^\d+\+\d+\*?$/.test(value) ||
+      /^\d+(?:\.\d+)?%$/.test(value)
+    );
   }
 
   private findPdfHeader(cells: string[]): {
@@ -595,6 +738,13 @@ export class PriceListsService {
     return Number.isFinite(amount) && amount >= 0 && amount <= 9999999999.99
       ? amount
       : null;
+  }
+
+  private pdfMoneyTokens(value: string): number[] {
+    return value
+      .split(/\s+/)
+      .map((token) => this.pdfMoney(token))
+      .filter((amount): amount is number => amount !== null);
   }
 
   private isPdfNumericValue(value: string): boolean {

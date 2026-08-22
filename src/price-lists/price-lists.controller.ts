@@ -123,4 +123,15 @@ export class PriceListsController {
   ): Promise<PriceListDetailResponse> {
     return this.priceListsService.activate(id);
   }
+
+  @Post(':id/refresh-matches')
+  @ApiOperation({
+    summary:
+      'Match previously unmatched Price List models after catalogue product names are corrected',
+  })
+  refreshMatches(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<PriceListDetailResponse> {
+    return this.priceListsService.refreshUnmatchedMatches(id);
+  }
 }

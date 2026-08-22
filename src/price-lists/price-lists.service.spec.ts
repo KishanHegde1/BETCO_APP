@@ -8,8 +8,8 @@ import { PriceListsService } from './price-lists.service';
 jest.mock('pdf-parse', () => jest.fn());
 
 describe('PriceListsService', () => {
-  const priceLists = { findOne: jest.fn() };
-  const priceListItems = { find: jest.fn() };
+  const priceLists = { findOne: jest.fn(), findOneBy: jest.fn() };
+  const priceListItems = { find: jest.fn(), save: jest.fn() };
   const products = { find: jest.fn(), save: jest.fn() };
   const service = new PriceListsService(
     priceLists as never,
@@ -148,6 +148,67 @@ describe('PriceListsService', () => {
         modelName: 'RC 26000 PRO',
         gstIncludedPrice: 18443,
       },
+    ]);
+  });
+
+  it('finds GST Included Price when the PDF prints the heading on separate lines', async () => {
+    (pdfParse as jest.Mock).mockResolvedValue({
+      numpages: 1,
+      text: [
+        'GST',
+        'Tax',
+        'Series\tModel\tDC Voltage\tBasic Price GST Rate\tIncluded MRP',
+        'Amount',
+        'Price',
+        'NXG 850e\t12V\t4591\t18%\t826\t5417\t7,000',
+        'NXG PRO Series\tSOLAR S/W UPS NXG PRO e 1KVA/12V\t12V\t9930\t18%\t1787\t11717\t17,500',
+      ].join('\n'),
+    });
+
+    const result = await service.extractPdf({
+      buffer: Buffer.from('%PDF-example'),
+      originalname: 'solar-dealer.pdf',
+      size: 12,
+    });
+
+    expect(result.rows).toEqual([
+      { rowNumber: 1, modelName: 'NXG 850e', gstIncludedPrice: 5417 },
+      {
+        rowNumber: 2,
+        modelName: 'SOLAR S/W UPS NXG PRO e 1KVA/12V',
+        gstIncludedPrice: 11717,
+      },
+    ]);
+  });
+
+  it('re-checks only unmatched rows after a catalogue product name is corrected', async () => {
+    priceLists.findOneBy.mockResolvedValue({ id: 'price-list-1' });
+    priceListItems.find.mockResolvedValue([
+      {
+        id: 'item-1',
+        priceListId: 'price-list-1',
+        normalizedModelName: 'NXG 850E',
+        productId: null,
+        matchStatus: PriceListItemMatchStatus.UNMATCHED,
+      },
+    ]);
+    products.find.mockResolvedValue([
+      { id: 'product-1', name: 'nxg 850e' } satisfies Pick<
+        Product,
+        'id' | 'name'
+      >,
+    ]);
+    const detail = { id: 'price-list-1', items: [] };
+    jest.spyOn(service, 'findOne').mockResolvedValue(detail as never);
+
+    await expect(service.refreshUnmatchedMatches('price-list-1')).resolves.toBe(
+      detail,
+    );
+    expect(priceListItems.save).toHaveBeenCalledWith([
+      expect.objectContaining({
+        productId: 'product-1',
+        matchStatus: PriceListItemMatchStatus.MATCHED,
+      }),
     ]);
   });
 });
