@@ -93,7 +93,10 @@ export class PmSuryaGharController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update a manageable PM Surya Ghar draft' })
+  @ApiOperation({
+    summary:
+      'Update a manageable PM Surya Ghar application (ready applications: admin only)',
+  })
   update(
     @Req() request: { user: JwtPayload },
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -103,7 +106,10 @@ export class PmSuryaGharController {
   }
 
   @Post(':id/items')
-  @ApiOperation({ summary: 'Add an item to a manageable application draft' })
+  @ApiOperation({
+    summary:
+      'Add an item to a manageable application (ready applications: admin only)',
+  })
   createItem(
     @Req() request: { user: JwtPayload },
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -114,7 +120,8 @@ export class PmSuryaGharController {
 
   @Patch(':id/items/:itemId')
   @ApiOperation({
-    summary: 'Update an item in a manageable application draft',
+    summary:
+      'Update an item in a manageable application (ready applications: admin only)',
   })
   updateItem(
     @Req() request: { user: JwtPayload },
@@ -127,7 +134,8 @@ export class PmSuryaGharController {
 
   @Delete(':id/items/:itemId')
   @ApiOperation({
-    summary: 'Remove an item from a manageable application draft',
+    summary:
+      'Remove an item from a manageable application (ready applications: admin only)',
   })
   removeItem(
     @Req() request: { user: JwtPayload },

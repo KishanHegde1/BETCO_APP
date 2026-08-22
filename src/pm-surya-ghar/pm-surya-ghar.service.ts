@@ -220,7 +220,7 @@ export class PmSuryaGharService {
     const currentActor = await this.requireCurrentActor(actor.sub);
     try {
       await this.applications.manager.transaction(async (manager) => {
-        const application = await this.lockAccessibleDraft(
+        const application = await this.lockManageableApplication(
           manager,
           applicationId,
           currentActor,
@@ -272,7 +272,7 @@ export class PmSuryaGharService {
     const currentActor = await this.requireCurrentActor(actor.sub);
     try {
       await this.applications.manager.transaction(async (manager) => {
-        const application = await this.lockAccessibleDraft(
+        const application = await this.lockManageableApplication(
           manager,
           applicationId,
           currentActor,
@@ -305,7 +305,7 @@ export class PmSuryaGharService {
   ): Promise<PmSuryaGharApplicationResponse> {
     const currentActor = await this.requireCurrentActor(actor.sub);
     await this.applications.manager.transaction(async (manager) => {
-      const application = await this.lockAccessibleDraft(
+      const application = await this.lockManageableApplication(
         manager,
         applicationId,
         currentActor,
@@ -350,7 +350,7 @@ export class PmSuryaGharService {
       applicationId,
       currentActor,
     );
-    this.assertDraft(application);
+    this.assertEditableApplication(application, currentActor);
     const validation = await this.validatePdf(file);
     if (dto.pageCount !== validation.pageCount) {
       throw new BadRequestException(
@@ -372,7 +372,7 @@ export class PmSuryaGharService {
     try {
       const saved = await this.applications.manager.transaction(
         async (manager) => {
-          const lockedApplication = await this.lockAccessibleDraft(
+          const lockedApplication = await this.lockManageableApplication(
             manager,
             applicationId,
             currentActor,
@@ -599,8 +599,9 @@ export class PmSuryaGharService {
   }
 
   /**
-   * Customer details can be corrected by an administrator after internal
-   * review. Staff can still change only their own drafts.
+   * Administrators can reopen a ready application to correct customer
+   * details, documents, and supplied items. Staff can still change only
+   * their own drafts.
    */
   private async lockManageableApplication(
     manager: EntityManager,
@@ -632,6 +633,20 @@ export class PmSuryaGharService {
     if (application.status !== PmSuryaGharApplicationStatus.DRAFT) {
       throw new ConflictException(
         'Only a draft PM Surya Ghar application can be changed.',
+      );
+    }
+  }
+
+  private assertEditableApplication(
+    application: PmSuryaGharApplication,
+    actor: CurrentPmSuryaGharActor,
+  ): void {
+    if (
+      application.status !== PmSuryaGharApplicationStatus.DRAFT &&
+      actor.role !== UserRole.ADMIN
+    ) {
+      throw new ConflictException(
+        'Only an administrator can edit a PM Surya Ghar application after it is ready.',
       );
     }
   }

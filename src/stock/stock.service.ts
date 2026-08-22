@@ -27,6 +27,7 @@ import {
 } from './dto/admin-daily-stock.dto';
 import { AddStaffStockDto } from './dto/add-staff-stock.dto';
 import { ReduceStaffStockDto } from './dto/reduce-staff-stock.dto';
+import { UpdateStockUnitPriceDto } from './dto/update-stock-unit-price.dto';
 
 export interface StaffStockAddResponse {
   productId: string;
@@ -46,6 +47,12 @@ export interface StaffStockReductionResponse {
   previousQuantity: number;
   newQuantity: number;
   movementId: string;
+}
+
+export interface StaffStockUnitPriceResponse {
+  productId: string;
+  productName: string;
+  unitPrice: string;
 }
 
 interface StaffStockAdjustment {
@@ -218,6 +225,42 @@ export class StockService {
       movementType: StockMovementType.STOCK_REDUCED,
     });
     return { ...adjustment, quantityReduced: dto.quantityToReduce };
+  }
+
+  /**
+   * Staff and administrators share this internal catalogue reference price.
+   * It is never included in dealer stock or catalogue responses.
+   */
+  async updateUnitPriceForStaff(
+    productId: string,
+    dto: UpdateStockUnitPriceDto,
+  ): Promise<StaffStockUnitPriceResponse> {
+    return this.dailyStockRepository.transaction(async (manager) => {
+      const productRepository = manager.getRepository(Product);
+      const product = await productRepository.findOneBy({
+        id: productId,
+        isActive: true,
+      });
+      const category = product
+        ? await manager.getRepository(Category).findOneBy({
+            id: product.categoryId,
+            isActive: true,
+          })
+        : null;
+      if (!product || !category) {
+        throw new BadRequestException(
+          'A selected product or its category is unavailable or inactive.',
+        );
+      }
+
+      product.unitPrice = dto.unitPrice.toFixed(2);
+      await productRepository.save(product);
+      return {
+        productId: product.id,
+        productName: product.name,
+        unitPrice: product.unitPrice,
+      };
+    });
   }
 
   private async adjustStockForStaff({

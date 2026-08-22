@@ -626,6 +626,37 @@ describe('PmSuryaGharService', () => {
     expect(result.canManage).toBe(true);
   });
 
+  it('allows an ADMIN to add supplied items after an application is ready', async () => {
+    const ready = application({
+      status: PmSuryaGharApplicationStatus.READY,
+      createdBy: staff.sub,
+    });
+    users.findOne.mockResolvedValueOnce({
+      id: admin.sub,
+      role: UserRole.ADMIN,
+      isActive: true,
+    });
+    transactionManager.findOne.mockResolvedValue(ready);
+    queryBuilder.getOne.mockResolvedValue(ready);
+
+    await service.createItem(ready.id, admin, {
+      itemName: 'Solar panel',
+      unit: PmSuryaGharItemUnit.PIECE,
+      quantity: 2,
+      unitPrice: 12500,
+    });
+
+    expect(itemRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: ready.id,
+        itemName: 'Solar panel',
+        quantity: '2.000',
+        unitPrice: '12500.00',
+      }),
+    );
+    expect(transactionManager.save).toHaveBeenCalledWith(ready);
+  });
+
   it('adds an item under the owner lock without accepting a client total', async () => {
     const draft = application();
     const item = suppliedItem();

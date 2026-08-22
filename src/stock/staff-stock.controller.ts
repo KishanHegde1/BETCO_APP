@@ -1,7 +1,17 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
@@ -13,9 +23,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { AddStaffStockDto } from './dto/add-staff-stock.dto';
 import { ReduceStaffStockDto } from './dto/reduce-staff-stock.dto';
+import { UpdateStockUnitPriceDto } from './dto/update-stock-unit-price.dto';
 import {
   StaffStockAddResponse,
   StaffStockReductionResponse,
+  StaffStockUnitPriceResponse,
   StockService,
 } from './stock.service';
 
@@ -54,5 +66,19 @@ export class StaffStockController {
     @Body() dto: ReduceStaffStockDto,
   ): Promise<StaffStockReductionResponse> {
     return this.stockService.reduceStockForStaff(request.user.sub, dto);
+  }
+
+  @Patch(':productId/unit-price')
+  @ApiOperation({
+    summary: 'Set the internal stock unit price for an active product',
+  })
+  @ApiOkResponse({
+    description: 'The internal stock reference price was updated.',
+  })
+  updateUnitPrice(
+    @Param('productId', new ParseUUIDPipe()) productId: string,
+    @Body() dto: UpdateStockUnitPriceDto,
+  ): Promise<StaffStockUnitPriceResponse> {
+    return this.stockService.updateUnitPriceForStaff(productId, dto);
   }
 }

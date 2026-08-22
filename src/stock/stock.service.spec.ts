@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 
+import { Category } from '../entities/category.entity';
+import { Product } from '../entities/product.entity';
 import { StockService } from './stock.service';
 
 describe('StockService', () => {
@@ -90,5 +92,56 @@ describe('StockService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repository.transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets staff update the internal price of an active stock product', async () => {
+    const product = {
+      id: 'product-1',
+      name: 'Solar inverter',
+      categoryId: 'category-1',
+      isActive: true,
+      unitPrice: '0.00',
+    };
+    const productRepository = {
+      findOneBy: jest.fn().mockResolvedValue(product),
+      save: jest.fn().mockResolvedValue(product),
+    };
+    const categoryRepository = {
+      findOneBy: jest.fn().mockResolvedValue({
+        id: 'category-1',
+        isActive: true,
+      }),
+    };
+    repository.transaction.mockImplementation(
+      (
+        work: (manager: {
+          getRepository: (entity: unknown) => unknown;
+        }) => Promise<unknown>,
+      ): Promise<unknown> =>
+        work({
+          getRepository: (entity: unknown): unknown =>
+            entity === Product
+              ? productRepository
+              : entity === Category
+                ? categoryRepository
+                : undefined,
+        }),
+    );
+
+    await expect(
+      service.updateUnitPriceForStaff('product-1', { unitPrice: 23500.5 }),
+    ).resolves.toEqual({
+      productId: 'product-1',
+      productName: 'Solar inverter',
+      unitPrice: '23500.50',
+    });
+
+    expect(categoryRepository.findOneBy).toHaveBeenCalledWith({
+      id: 'category-1',
+      isActive: true,
+    });
+    expect(productRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ unitPrice: '23500.50' }),
+    );
   });
 });
