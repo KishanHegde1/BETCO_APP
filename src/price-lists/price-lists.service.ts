@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import pdfParse from 'pdf-parse';
-import { EntityManager, In, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 
 import {
@@ -162,6 +162,7 @@ export class PriceListsService {
   async findActive(): Promise<PriceListDetailResponse | null> {
     const active = await this.priceLists.findOne({
       where: { isActive: true },
+      order: { effectiveDate: 'DESC', createdAt: 'DESC' },
     });
     return active ? this.findOne(active.id) : null;
   }
@@ -253,17 +254,8 @@ export class PriceListsService {
     createdBy: string,
   ): Promise<PriceListDetailResponse> {
     const list = await this.priceLists.manager.transaction(async (manager) => {
-      await this.lockActivation(manager);
       const preview = await this.buildPreview(dto, manager);
       const activate = dto.activate ?? true;
-      if (activate) {
-        await manager
-          .createQueryBuilder()
-          .update(PriceList)
-          .set({ isActive: false })
-          .where('is_active = TRUE')
-          .execute();
-      }
 
       const priceList = await manager.getRepository(PriceList).save(
         manager.getRepository(PriceList).create({
@@ -302,25 +294,22 @@ export class PriceListsService {
   }
 
   async activate(id: string): Promise<PriceListDetailResponse> {
-    await this.priceLists.manager.transaction(async (manager) => {
-      await this.lockActivation(manager);
-      const repository = manager.getRepository(PriceList);
-      const list = await repository.findOne({
-        where: { id },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!list) throw new NotFoundException('Price List not found.');
-      await manager
-        .createQueryBuilder()
-        .update(PriceList)
-        .set({ isActive: false })
-        .where('is_active = TRUE AND id != :id', { id })
-        .execute();
-      if (!list.isActive) {
-        list.isActive = true;
-        await repository.save(list);
-      }
-    });
+    const list = await this.priceLists.findOneBy({ id });
+    if (!list) throw new NotFoundException('Price List not found.');
+    if (!list.isActive) {
+      list.isActive = true;
+      await this.priceLists.save(list);
+    }
+    return this.findOne(id);
+  }
+
+  async deactivate(id: string): Promise<PriceListDetailResponse> {
+    const list = await this.priceLists.findOneBy({ id });
+    if (!list) throw new NotFoundException('Price List not found.');
+    if (list.isActive) {
+      list.isActive = false;
+      await this.priceLists.save(list);
+    }
     return this.findOne(id);
   }
 
@@ -371,7 +360,6 @@ export class PriceListsService {
   ): Promise<PriceListPreviewResponse> {
     const prepared = this.prepareRows(dto.items);
     const productRepository = manager?.getRepository(Product) ?? this.products;
-    const listRepository = manager?.getRepository(PriceList) ?? this.priceLists;
     const itemRepository =
       manager?.getRepository(PriceListItem) ?? this.priceListItems;
     const products = await productRepository.find({
@@ -384,22 +372,31 @@ export class PriceListsService {
       matches.push({ id: product.id, name: product.name });
       productsByModel.set(modelName, matches);
     }
-    const activeList = await listRepository.findOne({
-      where: { isActive: true },
-    });
     const matchedProductIds = prepared
       .map((row) => productsByModel.get(row.normalizedModelName))
       .filter((matches): matches is [ProductMatch] => matches?.length === 1)
       .map(([product]) => product.id);
     const activePrices =
-      activeList && matchedProductIds.length > 0
-        ? await itemRepository.find({
-            where: {
-              priceListId: activeList.id,
-              productId: In(matchedProductIds),
+      matchedProductIds.length > 0
+        ? await itemRepository
+            .createQueryBuilder('item')
+            .innerJoin(
+              PriceList,
+              'priceList',
+              'priceList.id = item.price_list_id AND priceList.is_active = TRUE',
+            )
+            .where('item.product_id IN (:...productIds)', {
+              productIds: matchedProductIds,
+            })
+            .andWhere('item.match_status = :matchStatus', {
               matchStatus: PriceListItemMatchStatus.MATCHED,
-            },
-          })
+            })
+            .distinctOn(['item.product_id'])
+            .orderBy('item.product_id', 'ASC')
+            .addOrderBy('priceList.effective_date', 'DESC')
+            .addOrderBy('priceList.created_at', 'DESC')
+            .addOrderBy('item.created_at', 'DESC')
+            .getMany()
         : [];
     const oldPriceByProduct = new Map(
       activePrices.map((item) => [item.productId!, item.gstIncludedPrice]),
@@ -661,11 +658,7 @@ export class PriceListsService {
   ): { modelName: string; gstIncludedPrice: number } | null {
     if (gstIncludedColumn < 0) return null;
     const gstIncludedPrice = this.pdfMoney(cells[gstIncludedColumn]);
-    const modelName = this.pdfModelName(
-      cells,
-      modelColumn,
-      gstIncludedColumn,
-    );
+    const modelName = this.pdfModelName(cells, modelColumn, gstIncludedColumn);
     return gstIncludedPrice !== null && modelName
       ? { modelName, gstIncludedPrice }
       : null;
@@ -827,12 +820,6 @@ export class PriceListsService {
       gstIncludedPrice: this.decimal(row.gstIncludedPrice, 2) ?? '0.00',
       mrp: this.decimal(row.mrp, 2),
     };
-  }
-
-  private async lockActivation(manager: EntityManager): Promise<void> {
-    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
-      'betco-price-list-activation',
-    ]);
   }
 
   private optionalText(value: string | undefined): string | null {

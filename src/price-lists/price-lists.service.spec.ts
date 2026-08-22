@@ -8,8 +8,25 @@ import { PriceListsService } from './price-lists.service';
 jest.mock('pdf-parse', () => jest.fn());
 
 describe('PriceListsService', () => {
-  const priceLists = { findOne: jest.fn(), findOneBy: jest.fn() };
-  const priceListItems = { find: jest.fn(), save: jest.fn() };
+  const priceLists = {
+    findOne: jest.fn(),
+    findOneBy: jest.fn(),
+    save: jest.fn(),
+  };
+  const activePricesQuery = {
+    innerJoin: jest.fn(),
+    where: jest.fn(),
+    andWhere: jest.fn(),
+    distinctOn: jest.fn(),
+    orderBy: jest.fn(),
+    addOrderBy: jest.fn(),
+    getMany: jest.fn(),
+  };
+  const priceListItems = {
+    find: jest.fn(),
+    save: jest.fn(),
+    createQueryBuilder: jest.fn(),
+  };
   const products = { find: jest.fn(), save: jest.fn() };
   const service = new PriceListsService(
     priceLists as never,
@@ -17,7 +34,17 @@ describe('PriceListsService', () => {
     products as never,
   );
 
-  beforeEach(() => jest.resetAllMocks());
+  beforeEach(() => {
+    jest.resetAllMocks();
+    priceListItems.createQueryBuilder.mockReturnValue(activePricesQuery);
+    activePricesQuery.innerJoin.mockReturnValue(activePricesQuery);
+    activePricesQuery.where.mockReturnValue(activePricesQuery);
+    activePricesQuery.andWhere.mockReturnValue(activePricesQuery);
+    activePricesQuery.distinctOn.mockReturnValue(activePricesQuery);
+    activePricesQuery.orderBy.mockReturnValue(activePricesQuery);
+    activePricesQuery.addOrderBy.mockReturnValue(activePricesQuery);
+    activePricesQuery.getMany.mockResolvedValue([]);
+  });
 
   it('matches product names only after exact trim, whitespace, and case normalization', async () => {
     products.find.mockResolvedValue([
@@ -30,8 +57,6 @@ describe('PriceListsService', () => {
         'id' | 'name'
       >,
     ]);
-    priceLists.findOne.mockResolvedValue(null);
-
     const result = await service.preview({
       name: 'August supplier list',
       effectiveDate: '2026-08-22',
@@ -55,7 +80,7 @@ describe('PriceListsService', () => {
     expect(products.save).not.toHaveBeenCalled();
   });
 
-  it('shows changed and unchanged GST-included prices against the active list', async () => {
+  it('shows changed and unchanged GST-included prices from the newest active list', async () => {
     products.find.mockResolvedValue([
       { id: 'product-1', name: 'Inverter One' } satisfies Pick<
         Product,
@@ -66,8 +91,7 @@ describe('PriceListsService', () => {
         'id' | 'name'
       >,
     ]);
-    priceLists.findOne.mockResolvedValue({ id: 'active-list' });
-    priceListItems.find.mockResolvedValue([
+    activePricesQuery.getMany.mockResolvedValue([
       {
         productId: 'product-1',
         gstIncludedPrice: '10000.00',
@@ -97,6 +121,30 @@ describe('PriceListsService', () => {
       oldGstIncludedPrice: '12000.00',
       gstIncludedPrice: '12500.00',
     });
+    expect(activePricesQuery.distinctOn).toHaveBeenCalledWith([
+      'item.product_id',
+    ]);
+    expect(activePricesQuery.addOrderBy).toHaveBeenCalledWith(
+      'priceList.effective_date',
+      'DESC',
+    );
+  });
+
+  it('activates and deactivates one Price List without changing the others', async () => {
+    const list = { id: 'price-list-1', isActive: false };
+    priceLists.findOneBy.mockResolvedValue(list);
+    const detail = { id: 'price-list-1', items: [] };
+    jest.spyOn(service, 'findOne').mockResolvedValue(detail as never);
+
+    await expect(service.activate('price-list-1')).resolves.toBe(detail);
+    expect(priceLists.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'price-list-1', isActive: true }),
+    );
+
+    await expect(service.deactivate('price-list-1')).resolves.toBe(detail);
+    expect(priceLists.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'price-list-1', isActive: false }),
+    );
   });
 
   it('extracts only the explicitly labelled GST-included price column from a PDF', async () => {

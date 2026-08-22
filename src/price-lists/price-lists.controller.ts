@@ -52,7 +52,7 @@ export class PriceListsController {
   }
 
   @Get('active')
-  @ApiOperation({ summary: 'Get the current active Price List, if any' })
+  @ApiOperation({ summary: 'Get the newest active Price List, if any' })
   findActive(): Promise<PriceListDetailResponse | null> {
     return this.priceListsService.findActive();
   }
@@ -115,13 +115,20 @@ export class PriceListsController {
 
   @Post(':id/activate')
   @ApiOperation({
-    summary:
-      'Activate a historical Price List and deactivate the previous list',
+    summary: 'Activate this Price List alongside other active lists',
   })
   activate(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<PriceListDetailResponse> {
     return this.priceListsService.activate(id);
+  }
+
+  @Post(':id/deactivate')
+  @ApiOperation({ summary: 'Deactivate this Price List' })
+  deactivate(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<PriceListDetailResponse> {
+    return this.priceListsService.deactivate(id);
   }
 
   @Post(':id/refresh-matches')

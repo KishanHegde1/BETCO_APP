@@ -162,16 +162,26 @@ export class DailyStockRepository {
         'stock."productId" = product.id',
       )
       .leftJoin(
-        PriceList,
-        'active_price_list',
-        'active_price_list.is_active = TRUE',
-      )
-      .leftJoin(
-        PriceListItem,
+        (subQuery) =>
+          subQuery
+            .select([
+              'item.product_id AS "productId"',
+              'item.gst_included_price AS "unitPrice"',
+            ])
+            .from(PriceListItem, 'item')
+            .innerJoin(
+              PriceList,
+              'price_list',
+              'price_list.id = item.price_list_id AND price_list.is_active = TRUE',
+            )
+            .where('item.match_status = :activePriceMatchStatus')
+            .distinctOn(['item.product_id'])
+            .orderBy('item.product_id', 'ASC')
+            .addOrderBy('price_list.effective_date', 'DESC')
+            .addOrderBy('price_list.created_at', 'DESC')
+            .addOrderBy('item.created_at', 'DESC'),
         'active_price_item',
-        `active_price_item.price_list_id = active_price_list.id
-          AND active_price_item.product_id = product.id
-          AND active_price_item.match_status = :activePriceMatchStatus`,
+        'active_price_item."productId" = product.id',
       )
       .where('product.is_active = true')
       .andWhere('category.is_active = true')
@@ -185,7 +195,7 @@ export class DailyStockRepository {
       'product.sku AS "sku"',
       'product.name AS "productName"',
       'product.unit AS "unit"',
-      'active_price_item.gst_included_price AS "unitPrice"',
+      'active_price_item."unitPrice" AS "unitPrice"',
       'category.id AS "categoryId"',
       'category.name AS "categoryName"',
       'product.is_active AS "isActive"',
