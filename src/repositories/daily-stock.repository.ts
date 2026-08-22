@@ -5,13 +5,19 @@ import { Brackets, EntityManager, Repository } from 'typeorm';
 import { Category } from '../entities/category.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Product } from '../entities/product.entity';
+import {
+  PriceListItem,
+  PriceListItemMatchStatus,
+} from '../entities/price-list-item.entity';
+import { PriceList } from '../entities/price-list.entity';
 
 export interface TodayStockItem {
   productId: string;
   sku: string;
   productName: string;
   unit: string;
-  unitPrice: string;
+  /** GST-included price from the active Price List, if exactly matched. */
+  unitPrice: string | null;
   categoryId: string;
   categoryName: string;
   quantity: number;
@@ -30,7 +36,7 @@ export interface AdminDailyStockItem {
   categoryId: string;
   categoryName: string;
   unit: string;
-  unitPrice: string;
+  unitPrice: string | null;
   quantity: number;
   sourceStockDate: string | null;
   isCarriedForward: boolean;
@@ -43,7 +49,7 @@ type ResolvedStockRow = {
   sku: string;
   productName: string;
   unit: string;
-  unitPrice: string | number;
+  unitPrice: string | number | null;
   categoryId: string;
   categoryName: string;
   quantity: string | number;
@@ -155,9 +161,22 @@ export class DailyStockRepository {
         'stock',
         'stock."productId" = product.id',
       )
+      .leftJoin(
+        PriceList,
+        'active_price_list',
+        'active_price_list.is_active = TRUE',
+      )
+      .leftJoin(
+        PriceListItem,
+        'active_price_item',
+        `active_price_item.price_list_id = active_price_list.id
+          AND active_price_item.product_id = product.id
+          AND active_price_item.match_status = :activePriceMatchStatus`,
+      )
       .where('product.is_active = true')
       .andWhere('category.is_active = true')
-      .setParameter('stockDate', date);
+      .setParameter('stockDate', date)
+      .setParameter('activePriceMatchStatus', PriceListItemMatchStatus.MATCHED);
   }
 
   private catalogueColumns(): string[] {
@@ -166,7 +185,7 @@ export class DailyStockRepository {
       'product.sku AS "sku"',
       'product.name AS "productName"',
       'product.unit AS "unit"',
-      'product.unit_price AS "unitPrice"',
+      'active_price_item.gst_included_price AS "unitPrice"',
       'category.id AS "categoryId"',
       'category.name AS "categoryName"',
       'product.is_active AS "isActive"',
@@ -200,9 +219,10 @@ export class DailyStockRepository {
     return Math.max(0, Number(row.quantity));
   }
 
-  private money(value: string | number): string {
+  private money(value: string | number | null): string | null {
+    if (value === null) return null;
     const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed.toFixed(2) : '0.00';
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed.toFixed(2) : null;
   }
 
   private boolean(value: boolean | string | undefined): boolean {

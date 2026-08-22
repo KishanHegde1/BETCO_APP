@@ -5,6 +5,8 @@ import { DailyStock } from '../entities/daily-stock.entity';
 import { Product } from '../entities/product.entity';
 import { Category } from '../entities/category.entity';
 import { StockMovement } from '../entities/stock-movement.entity';
+import { PriceListItem } from '../entities/price-list-item.entity';
+import { PriceList } from '../entities/price-list.entity';
 import { AdminStockController } from './admin-stock.controller';
 import { DailyStockRepository } from '../repositories/daily-stock.repository';
 import { StockController } from './stock.controller';
@@ -13,7 +15,14 @@ import { StockService } from './stock.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DailyStock, Product, Category, StockMovement]),
+    TypeOrmModule.forFeature([
+      DailyStock,
+      Product,
+      Category,
+      StockMovement,
+      PriceList,
+      PriceListItem,
+    ]),
   ],
   controllers: [StockController, AdminStockController, StaffStockController],
   providers: [StockService, DailyStockRepository],

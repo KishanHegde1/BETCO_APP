@@ -1,0 +1,456 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { EntityManager, In, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+
+import {
+  PriceListItem,
+  PriceListItemMatchStatus,
+} from '../entities/price-list-item.entity';
+import { PriceList } from '../entities/price-list.entity';
+import { Product } from '../entities/product.entity';
+import {
+  ImportPriceListDto,
+  PreviewPriceListDto,
+  PriceListItemInputDto,
+} from './dto/price-list.dto';
+import { normalizeModelName } from './model-name-normalizer';
+
+export type PriceListPreviewStatus =
+  'MATCHED' | 'UNMATCHED' | 'PRICE_CHANGED' | 'UNCHANGED';
+
+export interface PriceListResponse {
+  id: string;
+  name: string;
+  supplier: string | null;
+  effectiveDate: string;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  matchedCount: number;
+  unmatchedCount: number;
+  totalItems: number;
+}
+
+export interface PriceListItemResponse {
+  id: string;
+  productId: string | null;
+  productName: string | null;
+  modelName: string;
+  normalizedModelName: string;
+  netEffectivePrice: string | null;
+  gstRate: string | null;
+  gstAmount: string | null;
+  gstIncludedPrice: string;
+  mrp: string | null;
+  matchStatus: PriceListItemMatchStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PriceListDetailResponse extends PriceListResponse {
+  items: PriceListItemResponse[];
+}
+
+export interface PriceListPreviewRow {
+  rowNumber: number;
+  modelName: string;
+  normalizedModelName: string;
+  productId: string | null;
+  productName: string | null;
+  oldGstIncludedPrice: string | null;
+  gstIncludedPrice: string;
+  matchStatus: PriceListItemMatchStatus;
+  status: PriceListPreviewStatus;
+}
+
+export interface PriceListPreviewResponse {
+  name: string;
+  supplier: string | null;
+  effectiveDate: string;
+  matchedCount: number;
+  unmatchedCount: number;
+  priceChangedCount: number;
+  unchangedCount: number;
+  rows: PriceListPreviewRow[];
+}
+
+interface PreparedPriceListRow {
+  input: PriceListItemInputDto;
+  rowNumber: number;
+  modelName: string;
+  normalizedModelName: string;
+}
+
+interface ProductMatch {
+  id: string;
+  name: string;
+}
+
+@Injectable()
+export class PriceListsService {
+  constructor(
+    @InjectRepository(PriceList)
+    private readonly priceLists: Repository<PriceList>,
+    @InjectRepository(PriceListItem)
+    private readonly priceListItems: Repository<PriceListItem>,
+    @InjectRepository(Product)
+    private readonly products: Repository<Product>,
+  ) {}
+
+  async findAll(): Promise<PriceListResponse[]> {
+    const rows = await this.priceLists
+      .createQueryBuilder('priceList')
+      .leftJoin(PriceListItem, 'item', 'item.price_list_id = priceList.id')
+      .select([
+        'priceList.id AS "id"',
+        'priceList.name AS "name"',
+        'priceList.supplier AS "supplier"',
+        'priceList.effective_date AS "effectiveDate"',
+        'priceList.is_active AS "isActive"',
+        'priceList.created_at AS "createdAt"',
+        'priceList.updated_at AS "updatedAt"',
+        'COUNT(item.id) AS "totalItems"',
+        `COUNT(item.id) FILTER (WHERE item.match_status = '${PriceListItemMatchStatus.MATCHED}') AS "matchedCount"`,
+        `COUNT(item.id) FILTER (WHERE item.match_status = '${PriceListItemMatchStatus.UNMATCHED}') AS "unmatchedCount"`,
+      ])
+      .groupBy('priceList.id')
+      .orderBy('priceList.is_active', 'DESC')
+      .addOrderBy('priceList.effective_date', 'DESC')
+      .addOrderBy('priceList.created_at', 'DESC')
+      .getRawMany<{
+        id: string;
+        name: string;
+        supplier: string | null;
+        effectiveDate: string;
+        isActive: boolean | string;
+        createdAt: Date;
+        updatedAt: Date;
+        totalItems: string;
+        matchedCount: string;
+        unmatchedCount: string;
+      }>();
+    return rows.map((row) => this.toListResponse(row));
+  }
+
+  async findActive(): Promise<PriceListDetailResponse | null> {
+    const active = await this.priceLists.findOne({
+      where: { isActive: true },
+    });
+    return active ? this.findOne(active.id) : null;
+  }
+
+  async findOne(id: string): Promise<PriceListDetailResponse> {
+    const list = await this.priceLists.findOneBy({ id });
+    if (!list) throw new NotFoundException('Price List not found.');
+    const [summary] = await this.summaryForIds([id]);
+    const rows = await this.priceListItems
+      .createQueryBuilder('item')
+      .leftJoin(Product, 'product', 'product.id = item.product_id')
+      .where('item.price_list_id = :id', { id })
+      .select([
+        'item.id AS "id"',
+        'item.product_id AS "productId"',
+        'product.name AS "productName"',
+        'item.model_name AS "modelName"',
+        'item.normalized_model_name AS "normalizedModelName"',
+        'item.net_effective_price AS "netEffectivePrice"',
+        'item.gst_rate AS "gstRate"',
+        'item.gst_amount AS "gstAmount"',
+        'item.gst_included_price AS "gstIncludedPrice"',
+        'item.mrp AS "mrp"',
+        'item.match_status AS "matchStatus"',
+        'item.created_at AS "createdAt"',
+        'item.updated_at AS "updatedAt"',
+      ])
+      .orderBy('item.model_name', 'ASC')
+      .getRawMany<PriceListItemResponse>();
+    return {
+      ...(summary ??
+        this.toListResponse({
+          ...list,
+          totalItems: '0',
+          matchedCount: '0',
+          unmatchedCount: '0',
+        })),
+      items: rows.map((row) => this.toItemResponse(row)),
+    };
+  }
+
+  preview(dto: PreviewPriceListDto): Promise<PriceListPreviewResponse> {
+    return this.buildPreview(dto);
+  }
+
+  async import(
+    dto: ImportPriceListDto,
+    createdBy: string,
+  ): Promise<PriceListDetailResponse> {
+    const list = await this.priceLists.manager.transaction(async (manager) => {
+      await this.lockActivation(manager);
+      const preview = await this.buildPreview(dto, manager);
+      const activate = dto.activate ?? true;
+      if (activate) {
+        await manager
+          .createQueryBuilder()
+          .update(PriceList)
+          .set({ isActive: false })
+          .where('is_active = TRUE')
+          .execute();
+      }
+
+      const priceList = await manager.getRepository(PriceList).save(
+        manager.getRepository(PriceList).create({
+          name: dto.name.trim(),
+          supplier: this.optionalText(dto.supplier),
+          effectiveDate: dto.effectiveDate,
+          isActive: activate,
+          createdBy,
+        }),
+      );
+      const prepared = this.prepareRows(dto.items);
+      const rowsByNumber = new Map(
+        preview.rows.map((row) => [row.rowNumber, row]),
+      );
+      const itemRepository = manager.getRepository(PriceListItem);
+      await itemRepository.save(
+        prepared.map((row) => {
+          const previewRow = rowsByNumber.get(row.rowNumber)!;
+          return itemRepository.create({
+            priceListId: priceList.id,
+            productId: previewRow.productId,
+            modelName: row.modelName,
+            normalizedModelName: row.normalizedModelName,
+            netEffectivePrice: this.money(row.input.netEffectivePrice),
+            gstRate: this.rate(row.input.gstRate),
+            gstAmount: this.money(row.input.gstAmount),
+            gstIncludedPrice: this.money(row.input.gstIncludedPrice)!,
+            mrp: this.money(row.input.mrp),
+            matchStatus: previewRow.matchStatus,
+          });
+        }),
+      );
+      return priceList;
+    });
+    return this.findOne(list.id);
+  }
+
+  async activate(id: string): Promise<PriceListDetailResponse> {
+    await this.priceLists.manager.transaction(async (manager) => {
+      await this.lockActivation(manager);
+      const repository = manager.getRepository(PriceList);
+      const list = await repository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!list) throw new NotFoundException('Price List not found.');
+      await manager
+        .createQueryBuilder()
+        .update(PriceList)
+        .set({ isActive: false })
+        .where('is_active = TRUE AND id != :id', { id })
+        .execute();
+      if (!list.isActive) {
+        list.isActive = true;
+        await repository.save(list);
+      }
+    });
+    return this.findOne(id);
+  }
+
+  private async buildPreview(
+    dto: PreviewPriceListDto,
+    manager?: EntityManager,
+  ): Promise<PriceListPreviewResponse> {
+    const prepared = this.prepareRows(dto.items);
+    const productRepository = manager?.getRepository(Product) ?? this.products;
+    const listRepository = manager?.getRepository(PriceList) ?? this.priceLists;
+    const itemRepository =
+      manager?.getRepository(PriceListItem) ?? this.priceListItems;
+    const products = await productRepository.find({
+      select: { id: true, name: true },
+    });
+    const productsByModel = new Map<string, ProductMatch[]>();
+    for (const product of products) {
+      const modelName = normalizeModelName(product.name);
+      const matches = productsByModel.get(modelName) ?? [];
+      matches.push({ id: product.id, name: product.name });
+      productsByModel.set(modelName, matches);
+    }
+    const activeList = await listRepository.findOne({
+      where: { isActive: true },
+    });
+    const matchedProductIds = prepared
+      .map((row) => productsByModel.get(row.normalizedModelName))
+      .filter((matches): matches is [ProductMatch] => matches?.length === 1)
+      .map(([product]) => product.id);
+    const activePrices =
+      activeList && matchedProductIds.length > 0
+        ? await itemRepository.find({
+            where: {
+              priceListId: activeList.id,
+              productId: In(matchedProductIds),
+              matchStatus: PriceListItemMatchStatus.MATCHED,
+            },
+          })
+        : [];
+    const oldPriceByProduct = new Map(
+      activePrices.map((item) => [item.productId!, item.gstIncludedPrice]),
+    );
+    const rows = prepared.map((row) => {
+      const productMatches = productsByModel.get(row.normalizedModelName) ?? [];
+      const product = productMatches.length === 1 ? productMatches[0] : null;
+      const oldGstIncludedPrice = product
+        ? (oldPriceByProduct.get(product.id) ?? null)
+        : null;
+      const gstIncludedPrice = this.money(row.input.gstIncludedPrice)!;
+      const matchStatus = product
+        ? PriceListItemMatchStatus.MATCHED
+        : PriceListItemMatchStatus.UNMATCHED;
+      const status: PriceListPreviewStatus = !product
+        ? 'UNMATCHED'
+        : oldGstIncludedPrice === null
+          ? 'MATCHED'
+          : this.sameMoney(oldGstIncludedPrice, gstIncludedPrice)
+            ? 'UNCHANGED'
+            : 'PRICE_CHANGED';
+      return {
+        rowNumber: row.rowNumber,
+        modelName: row.modelName,
+        normalizedModelName: row.normalizedModelName,
+        productId: product?.id ?? null,
+        productName: product?.name ?? null,
+        oldGstIncludedPrice,
+        gstIncludedPrice,
+        matchStatus,
+        status,
+      };
+    });
+    return {
+      name: dto.name.trim(),
+      supplier: this.optionalText(dto.supplier),
+      effectiveDate: dto.effectiveDate,
+      matchedCount: rows.filter(
+        (row) => row.matchStatus === PriceListItemMatchStatus.MATCHED,
+      ).length,
+      unmatchedCount: rows.filter(
+        (row) => row.matchStatus === PriceListItemMatchStatus.UNMATCHED,
+      ).length,
+      priceChangedCount: rows.filter((row) => row.status === 'PRICE_CHANGED')
+        .length,
+      unchangedCount: rows.filter((row) => row.status === 'UNCHANGED').length,
+      rows,
+    };
+  }
+
+  private prepareRows(items: PriceListItemInputDto[]): PreparedPriceListRow[] {
+    const normalizedModels = new Set<string>();
+    return items.map((input, index) => {
+      const modelName = input.modelName.trim().replace(/\s+/g, ' ');
+      const normalizedModelName = normalizeModelName(modelName);
+      if (!normalizedModelName) {
+        throw new BadRequestException(
+          'Every Price List model must be present.',
+        );
+      }
+      if (normalizedModels.has(normalizedModelName)) {
+        throw new BadRequestException(
+          `Duplicate model in Price List: ${modelName}. Keep only one row per exact model.`,
+        );
+      }
+      normalizedModels.add(normalizedModelName);
+      return { input, rowNumber: index + 1, modelName, normalizedModelName };
+    });
+  }
+
+  private async summaryForIds(ids: string[]): Promise<PriceListResponse[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.priceLists
+      .createQueryBuilder('priceList')
+      .leftJoin(PriceListItem, 'item', 'item.price_list_id = priceList.id')
+      .where('priceList.id IN (:...ids)', { ids })
+      .select([
+        'priceList.id AS "id"',
+        'priceList.name AS "name"',
+        'priceList.supplier AS "supplier"',
+        'priceList.effective_date AS "effectiveDate"',
+        'priceList.is_active AS "isActive"',
+        'priceList.created_at AS "createdAt"',
+        'priceList.updated_at AS "updatedAt"',
+        'COUNT(item.id) AS "totalItems"',
+        `COUNT(item.id) FILTER (WHERE item.match_status = '${PriceListItemMatchStatus.MATCHED}') AS "matchedCount"`,
+        `COUNT(item.id) FILTER (WHERE item.match_status = '${PriceListItemMatchStatus.UNMATCHED}') AS "unmatchedCount"`,
+      ])
+      .groupBy('priceList.id')
+      .getRawMany();
+    return rows.map((row) => this.toListResponse(row));
+  }
+
+  private toListResponse(row: {
+    id: string;
+    name: string;
+    supplier: string | null;
+    effectiveDate: string;
+    isActive: boolean | string;
+    createdAt: Date;
+    updatedAt: Date;
+    totalItems: string;
+    matchedCount: string;
+    unmatchedCount: string;
+  }): PriceListResponse {
+    return {
+      id: row.id,
+      name: row.name,
+      supplier: row.supplier,
+      effectiveDate: row.effectiveDate,
+      isActive: row.isActive === true || row.isActive === 'true',
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      totalItems: Number(row.totalItems),
+      matchedCount: Number(row.matchedCount),
+      unmatchedCount: Number(row.unmatchedCount),
+    };
+  }
+
+  private toItemResponse(row: PriceListItemResponse): PriceListItemResponse {
+    return {
+      ...row,
+      netEffectivePrice: this.decimal(row.netEffectivePrice, 2),
+      gstRate: this.decimal(row.gstRate, 3),
+      gstAmount: this.decimal(row.gstAmount, 2),
+      gstIncludedPrice: this.decimal(row.gstIncludedPrice, 2) ?? '0.00',
+      mrp: this.decimal(row.mrp, 2),
+    };
+  }
+
+  private async lockActivation(manager: EntityManager): Promise<void> {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      'betco-price-list-activation',
+    ]);
+  }
+
+  private optionalText(value: string | undefined): string | null {
+    const text = value?.trim();
+    return text ? text : null;
+  }
+
+  private money(value: number | undefined): string | null {
+    return value === undefined ? null : value.toFixed(2);
+  }
+
+  private rate(value: number | undefined): string | null {
+    return value === undefined ? null : value.toFixed(3);
+  }
+
+  private decimal(value: string | null, scale: number): string | null {
+    if (value === null) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(scale) : null;
+  }
+
+  private sameMoney(left: string, right: string): boolean {
+    return Number(left).toFixed(2) === Number(right).toFixed(2);
+  }
+}

@@ -21,6 +21,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PmSuryaGharModule } from './pm-surya-ghar/pm-surya-ghar.module';
+import { PriceListsModule } from './price-lists/price-lists.module';
 import { ProductsModule } from './products/products.module';
 import { ProfileModule } from './profile/profile.module';
 import { StockModule } from './stock/stock.module';
@@ -52,6 +53,7 @@ import { UsersModule } from './users/users.module';
     BillingModule,
     PaymentsModule,
     PmSuryaGharModule,
+    PriceListsModule,
     NotificationsModule,
     ProfileModule,
     HealthModule,
