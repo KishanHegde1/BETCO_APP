@@ -24,6 +24,14 @@ const uppercase = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim().toUpperCase() : value;
 const uppercaseValue = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.toUpperCase() : value;
+const queryBoolean = ({ value }: { value: unknown }): unknown => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return value;
+};
 
 export class CreateAdminProductDto {
   @ApiProperty({ format: 'uuid' })
@@ -183,6 +191,10 @@ export class AdminProductListQueryDto {
   categoryId?: string;
 
   @ApiPropertyOptional({ example: true })
+  // Query parameters arrive as text. Force the value through String first so
+  // implicit conversion cannot turn the non-empty text "false" into true.
+  @Type(() => String)
+  @Transform(queryBoolean)
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;

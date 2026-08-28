@@ -7,12 +7,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiCreatedResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RegisterDealerDto } from './dto/register-dealer.dto';
 import { SignInDto } from './dto/sign-in.dto';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { LoginResult } from './interfaces/login-result.interface';
@@ -21,6 +22,19 @@ import { LoginResult } from './interfaces/login-result.interface';
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('register-dealer')
+  @ApiOperation({
+    summary: 'Register a new dealer account',
+    description:
+      'Creates an active dealer account only. This endpoint cannot create staff or administrator accounts.',
+  })
+  @ApiCreatedResponse({
+    description: 'Dealer account registered and signed in.',
+  })
+  registerDealer(@Body() dto: RegisterDealerDto): Promise<LoginResult> {
+    return this.authService.registerDealer(dto);
+  }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)

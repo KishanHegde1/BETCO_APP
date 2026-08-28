@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: betco-traders-api
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Paste the Neon pooled connection string only in Render's secret prompt.
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: DATABASE_SSL_REJECT_UNAUTHORIZED
+        value: "true"
+      # Render creates a unique, secure JWT signing key on first deployment.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 15d
+      - key: SWAGGER_ENABLED
+        value: "false"
+      # Needed for document uploads in PM Surya Ghar and Solar Projects.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      # Needed only when the Tally connector is enabled.
+      - key: TALLY_CONNECTOR_ID
+        sync: false
+      - key: TALLY_CONNECTOR_SECRET
+        sync: false

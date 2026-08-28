@@ -3,6 +3,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { verify } from 'jsonwebtoken';
 
 import { UserRole } from '../common/constants/user-role.enum';
+import { User } from '../entities/user.entity';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { AuthService } from './auth.service';
 
@@ -15,9 +16,22 @@ describe('AuthService', () => {
       return undefined;
     }),
   };
+  const existingAccountQuery = {
+    where: jest.fn(),
+    getOne: jest.fn(),
+  };
+  const usersRepository = {
+    createQueryBuilder: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+  const dealersRepository = { create: jest.fn(), save: jest.fn() };
+  const manager = { getRepository: jest.fn() };
+  const dataSource = { transaction: jest.fn() };
   const service = new AuthService(
     usersService as never,
     configService as never,
+    dataSource as never,
   );
   const staffUser = {
     id: 'staff-1',
@@ -44,6 +58,25 @@ describe('AuthService', () => {
       if (key === 'jwt.expiresIn') return '15d';
       return undefined;
     });
+    existingAccountQuery.where.mockReturnValue(existingAccountQuery);
+    existingAccountQuery.getOne.mockResolvedValue(null);
+    usersRepository.createQueryBuilder.mockReturnValue(existingAccountQuery);
+    usersRepository.create.mockImplementation((value) => value);
+    usersRepository.save.mockImplementation(async (value) => ({
+      ...value,
+      id: 'dealer-user-1',
+    }));
+    dealersRepository.create.mockImplementation((value) => value);
+    dealersRepository.save.mockImplementation(async (value) => ({
+      ...value,
+      id: 'dealer-1',
+    }));
+    manager.getRepository.mockImplementation((entity) =>
+      entity === User ? usersRepository : dealersRepository,
+    );
+    dataSource.transaction.mockImplementation(async (callback) =>
+      callback(manager),
+    );
   });
 
   it('signs in an active STAFF user without requiring a dealer record', async () => {
@@ -119,5 +152,32 @@ describe('AuthService', () => {
     ).resolves.toMatchObject({
       user: { username: 'Admin', role: UserRole.ADMIN },
     });
+  });
+
+  it('registers a dealer with the dealer role only and returns a session', async () => {
+    const result = await service.registerDealer({
+      username: 'New Dealer',
+      phone: '9000000003',
+      shopName: 'New Dealer Electricals',
+      password: 'secure-password',
+      confirmPassword: 'secure-password',
+      email: 'dealer@example.com',
+      address: 'Main Road',
+    });
+
+    expect(usersRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: UserRole.USER,
+        isActive: true,
+        mustChangePassword: false,
+      }),
+    );
+    expect(dealersRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'dealer-user-1',
+        businessName: 'New Dealer Electricals',
+      }),
+    );
+    expect(result.user).toMatchObject({ role: UserRole.USER });
   });
 });
