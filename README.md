@@ -46,7 +46,7 @@ Firebase is not configured in this backend, so no Firebase environment variables
 
 The API reads `DATABASE_URL` at startup, enables TLS for Neon and in production, retries initial connections, limits its pool size, and keeps `synchronize: false`. It never auto-runs schema changes.
 
-Apply the SQL files in `src/database/migrations` manually, in numeric order, using the **Neon SQL Editor** for the target database. The current migration set is `001` through `030`; apply every migration not already present in the target database, including `030_allow_multiple_active_price_lists.sql`.
+Apply the SQL files in `src/database/migrations` manually, in numeric order, using the **Neon SQL Editor** for the target database. The current migration set is `001` through `031`; apply every migration not already present in the target database, including `031_create_account_deletion_requests.sql` before publishing the account-deletion page.
 
 Do not run the development seed against a production Neon database. `npm run seed:dev` refuses `NODE_ENV=production`.
 

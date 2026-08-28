@@ -16,6 +16,7 @@ import { DatabaseModule } from './database/database.module';
 import { DealersModule } from './dealers/dealers.module';
 import { HealthModule } from './health/health.module';
 import { LoggerModule } from './logger/logger.module';
+import { LegalModule } from './legal/legal.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }]),
     LoggerModule,
+    LegalModule,
     DatabaseModule,
     AuthModule,
     CashDeclarationsModule,
