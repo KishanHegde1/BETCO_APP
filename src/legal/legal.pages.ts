@@ -51,7 +51,28 @@ export const privacyPolicyPage = (): string =>
      <h2>Your choices</h2>
      <p>You can update most profile information from the app. For access, correction, deletion or privacy questions, use the account-deletion request page and select the contact method you want us to use.</p>
      <h2>Changes to this policy</h2>
-     <p>We may update this policy when the app or our legal obligations change. The current version will always be published at this address.</p>`,
+     <p>We may update this policy when the app or our legal obligations change. The current version will always be published at this address.</p>
+     <p><a href="/terms-and-conditions">Terms and Conditions</a> &middot; <a href="/account-deletion">Account Deletion</a></p>`,
+  );
+
+export const termsAndConditionsPage = (): string =>
+  page(
+    'Terms and Conditions | Betco Traders',
+    `<h1>Terms and Conditions</h1>
+     <p class="meta">Betco Traders by Betco Aqua Traders &middot; Effective 28 August 2026</p>
+     <p>These terms govern use of the Betco Traders application and its supporting services. By using the service, you confirm that you are an authorised dealer, staff member or administrator for the business account assigned to you.</p>
+     <h2>Access and account security</h2>
+     <p>Keep your mobile number, password and device secure. Do not share access with unauthorised people. Tell Betco Aqua Traders promptly if you believe an account has been accessed without permission.</p>
+     <h2>Business records</h2>
+     <p>Orders, stock, prices, invoices, delivery acknowledgements and solar-project records must be entered accurately. Only authorised users may approve, edit, ship or receive records according to their assigned role.</p>
+     <h2>Documents and content</h2>
+     <p>You may upload only documents and images that you are allowed to use and that are relevant to the business workflow. Do not upload malicious, unlawful, confidential third-party or unrelated material.</p>
+     <h2>Availability and changes</h2>
+     <p>We work to keep the service available and secure, but it may be changed, maintained or temporarily unavailable. We may suspend access to protect the service, data or users, or where a user breaches these terms.</p>
+     <h2>Privacy, support and deletion</h2>
+     <p>Our <a href="/privacy-policy">Privacy Policy</a> explains how data is handled. For help with your business account, contact your Betco account administrator. You can submit an account or personal-data deletion request at any time through the external <a href="/account-deletion">Account Deletion page</a>.</p>
+     <h2>Contact</h2>
+     <p>For questions about these terms or the application, contact your Betco account administrator. If you no longer have access to the app, use the Account Deletion page and include your preferred verification contact.</p>`,
   );
 
 export const accountDeletionPage = (): string =>
@@ -70,7 +91,7 @@ export const accountDeletionPage = (): string =>
        <textarea id="details" name="details" maxlength="1000"></textarea>
        <button type="submit">Submit deletion request</button>
      </form>
-     <p><a href="/privacy-policy">Read the Privacy Policy</a></p>`,
+     <p><a href="/privacy-policy">Read the Privacy Policy</a> &middot; <a href="/terms-and-conditions">Terms and Conditions</a></p>`,
   );
 
 export const accountDeletionConfirmationPage = (reference: string): string =>
@@ -79,5 +100,5 @@ export const accountDeletionConfirmationPage = (reference: string): string =>
     `<h1>Request received</h1>
      <p>Your account-deletion request was submitted successfully.</p>
      <p class="notice">Your reference is <strong>${reference}</strong>. We will use the verification contact you provided before making changes to an account.</p>
-     <p><a href="/privacy-policy">Return to the Privacy Policy</a></p>`,
+     <p><a href="/privacy-policy">Return to the Privacy Policy</a> &middot; <a href="/terms-and-conditions">Terms and Conditions</a></p>`,
   );

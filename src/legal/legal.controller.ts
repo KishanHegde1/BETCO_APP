@@ -16,6 +16,7 @@ import {
   accountDeletionConfirmationPage,
   accountDeletionPage,
   privacyPolicyPage,
+  termsAndConditionsPage,
 } from './legal.pages';
 import { LegalService } from './legal.service';
 
@@ -29,6 +30,13 @@ export class LegalController {
   @ApiExcludeEndpoint()
   privacyPolicy(@Res() response: Response): void {
     response.type('html').send(privacyPolicyPage());
+  }
+
+  @Public()
+  @Get('terms-and-conditions')
+  @ApiExcludeEndpoint()
+  termsAndConditions(@Res() response: Response): void {
+    response.type('html').send(termsAndConditionsPage());
   }
 
   @Public()
