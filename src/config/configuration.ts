@@ -32,8 +32,23 @@ export interface ApplicationConfiguration {
   };
 }
 
+/**
+ * pg currently treats `sslmode=require` as `verify-full`, but logs a runtime
+ * warning because this will change in a future major release. Normalize the
+ * Neon URL now so TLS verification remains explicit and startup stays quiet.
+ */
+export function normalizePostgresSslMode(
+  databaseUrl?: string,
+): string | undefined {
+  return databaseUrl?.replace(
+    /([?&]sslmode=)require(?=(&|$))/i,
+    '$1verify-full',
+  );
+}
+
 export default (): ApplicationConfiguration => {
   const nodeEnv = process.env.NODE_ENV ?? 'development';
+  const databaseUrl = normalizePostgresSslMode(process.env.DATABASE_URL);
   return {
     app: {
       port: Number.parseInt(process.env.PORT ?? '3000', 10),
@@ -47,13 +62,13 @@ export default (): ApplicationConfiguration => {
         (process.env.SWAGGER_ENABLED === undefined && nodeEnv !== 'production'),
     },
     database: {
-      url: process.env.DATABASE_URL,
+      url: databaseUrl,
       // Neon requires TLS in every environment, including local development.
       // DATABASE_SSL permits an explicit override for a local PostgreSQL server.
       ssl:
         process.env.DATABASE_SSL === 'true' ||
         (process.env.DATABASE_SSL === undefined &&
-          (process.env.DATABASE_URL?.includes('.neon.tech') ?? false)) ||
+          (databaseUrl?.includes('.neon.tech') ?? false)) ||
         ((process.env.NODE_ENV ?? 'development') === 'production' &&
           process.env.DATABASE_SSL !== 'false'),
       sslRejectUnauthorized:

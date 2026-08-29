@@ -4,6 +4,7 @@ import * as bcrypt from 'bcrypt';
 import { DataSource, Repository } from 'typeorm';
 
 import { UserRole } from '../common/constants/user-role.enum';
+import { normalizePostgresSslMode } from '../config/configuration';
 import { Category } from '../entities/category.entity';
 import { DailyStock } from '../entities/daily-stock.entity';
 import { Dealer } from '../entities/dealer.entity';
@@ -26,7 +27,7 @@ async function seed(): Promise<void> {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The development seed cannot run in production.');
   }
-  const url = process.env.DATABASE_URL;
+  const url = normalizePostgresSslMode(process.env.DATABASE_URL);
   if (!url) {
     throw new Error('DATABASE_URL is required for the development seed.');
   }

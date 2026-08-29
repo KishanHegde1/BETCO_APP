@@ -5,6 +5,9 @@
   "author": "Betco Aqua Traders",
   "private": true,
   "license": "UNLICENSED",
+  "overrides": {
+    "uuid": "11.1.1"
+  },
   "engines": {
     "node": ">=20.11.1"
   },
