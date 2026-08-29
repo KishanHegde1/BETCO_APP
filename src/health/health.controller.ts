@@ -12,7 +12,11 @@ export class HealthController {
   @Public()
   @Get()
   @ApiOperation({ summary: 'Service health check' })
-  getHealth(): { status: string; service: string } {
+  getHealth(): Promise<{
+    status: string;
+    service: string;
+    database: string;
+  }> {
     return this.healthService.getStatus();
   }
 }
