@@ -400,6 +400,13 @@ export class OrdersRepository {
         '"order".bill_generated_at AS "billGeneratedAt"',
         '"order".bill_generated_by AS "billGeneratedBy"',
         'billGenerator.username AS "billGeneratedByName"',
+        '"order".delivery_status AS "deliveryStatus"',
+        '"order".shipped_at AS "shippedAt"',
+        '"order".shipped_by AS "shippedBy"',
+        'shippedBy.username AS "shippedByName"',
+        '"order".received_at AS "receivedAt"',
+        '"order".received_by AS "receivedBy"',
+        'receivedBy.username AS "receivedByName"',
         '"order".status AS "status"',
         '"order".created_at AS "createdAt"',
       ])
